@@ -1,8 +1,11 @@
 """Polite async HTTP client: per-site pacing, robots.txt, retries.
 
-URLs come from untrusted pages (feed items, search results, redirects), so every
-request - including each redirect hop - must go to a public address, and bodies
-are capped in size while streaming (this also bounds gzip Content-Encoding).
+URLs come from untrusted pages (feed items, search results, redirects), so:
+- every request, including each redirect hop, must target a public address
+  (checked by name before sending, and again on the connected peer address,
+  which defeats DNS rebinding);
+- bodies are read raw and decompressed here with a size budget, so neither a
+  large response nor a gzip bomb can exhaust memory.
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import asyncio
 import ipaddress
 import logging
 import time
+import zlib
 from collections import Counter, defaultdict
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
@@ -27,6 +31,10 @@ class BlockedURL(Exception):
 
 
 class ResponseTooLarge(Exception):
+    pass
+
+
+class UnsupportedEncoding(Exception):
     pass
 
 
@@ -52,11 +60,13 @@ class Fetcher:
                 "User-Agent": self.user_agent,
                 "Accept-Language": "bn-BD,bn;q=0.9,en;q=0.8",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip",  # the only coding _get_capped decodes
             },
             timeout=float(s.get("timeout_seconds", 25)),
             follow_redirects=True,
-            event_hooks={"request": [self._check_target]},
+            event_hooks={"request": [self._check_target], "response": [self._check_peer]},
             transport=transport,
+            trust_env=False,  # a proxy would hide the real peer address from _check_peer
         )
         self._sem = asyncio.Semaphore(int(s.get("concurrency", 12)))
         self._host_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -64,6 +74,7 @@ class Fetcher:
         self._robots: dict[str, RobotFileParser | None] = {}
         self._robots_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.stats: Counter[str] = Counter()
+        self.failures: dict[str, str] = {}  # url -> reason, for the run log
 
     async def __aenter__(self) -> Fetcher:
         return self
@@ -72,7 +83,11 @@ class Fetcher:
         await self._client.aclose()
 
     async def _check_target(self, request: httpx.Request) -> None:
-        """httpx request hook: runs for the first request and for every redirect."""
+        """Request hook (first request and every redirect): early check by host name.
+
+        Resolution failures block the request and are not cached. This check alone
+        can be raced by DNS rebinding; _check_peer is the authoritative one.
+        """
         if request.url.scheme not in ("http", "https"):
             raise BlockedURL(str(request.url))
         host = request.url.host
@@ -83,21 +98,53 @@ class Fetcher:
             except ValueError:
                 try:
                     infos = await asyncio.get_running_loop().getaddrinfo(host, None)
-                    public = all(_is_public_ip(info[4][0]) for info in infos)
-                except OSError:
-                    public = True  # unresolvable: let the request fail normally
+                except OSError as exc:
+                    raise BlockedURL(f"{request.url} (cannot resolve)") from exc
+                public = bool(infos) and all(_is_public_ip(info[4][0]) for info in infos)
             self._public_hosts[host] = public
         if not self._public_hosts[host]:
             raise BlockedURL(str(request.url))
 
+    async def _check_peer(self, response: httpx.Response) -> None:
+        """Response hook (every hop): the address actually connected to must be public.
+
+        Runs before any body is read; httpx closes the response when this raises.
+        """
+        stream = response.extensions.get("network_stream")
+        if stream is None:  # e.g. test transports
+            return
+        addr = stream.get_extra_info("server_addr")
+        if addr and not _is_public_ip(addr[0]):
+            raise BlockedURL(f"{response.request.url} (connected to {addr[0]})")
+
     async def _get_capped(self, url: str) -> httpx.Response:
         async with self._client.stream("GET", url) as r:
+            coding = r.headers.get("content-encoding", "").strip().lower()
+            if coding in ("", "identity"):
+                decomp = None
+            elif coding in ("gzip", "x-gzip"):
+                decomp = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            else:  # stacked or unrequested codings ("gzip, gzip", "br", ...)
+                raise UnsupportedEncoding(f"{url}: {coding}")
             body = bytearray()
-            async for chunk in r.aiter_bytes():
-                body += chunk
-                if len(body) > self.max_bytes:
-                    raise ResponseTooLarge(url)
-            # aiter_bytes already decoded the body; drop the encoding headers to match.
+            try:
+                async for chunk in r.aiter_raw():
+                    if decomp is None:
+                        body += chunk
+                    else:
+                        # budget >= 1 here (0 would mean "unlimited" to zlib)
+                        body += decomp.decompress(chunk, self.max_bytes + 1 - len(body))
+                        if decomp.unconsumed_tail:
+                            raise ResponseTooLarge(url)
+                    if len(body) > self.max_bytes:
+                        raise ResponseTooLarge(url)
+                if decomp is not None:
+                    body += decomp.flush()
+            except zlib.error as exc:
+                raise UnsupportedEncoding(f"{url}: corrupt gzip") from exc
+            if len(body) > self.max_bytes:
+                raise ResponseTooLarge(url)
+            # The body is decoded now; drop the encoding headers to match.
             headers = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in _DROP_HEADERS]
             return httpx.Response(r.status_code, headers=headers, content=bytes(body), request=r.request)
 
@@ -134,9 +181,10 @@ class Fetcher:
                 try:
                     async with self._sem:
                         resp = await self._get_capped(url)
-                except (BlockedURL, ResponseTooLarge) as exc:
+                except (BlockedURL, ResponseTooLarge, UnsupportedEncoding) as exc:
                     self.stats[type(exc).__name__] += 1
-                    log.warning("not fetching %s: %s", url, type(exc).__name__)
+                    self.failures[url] = type(exc).__name__
+                    log.warning("not fetching %s: %s", url, exc)
                     return None
                 except httpx.HTTPError as exc:
                     resp = None
@@ -153,14 +201,17 @@ class Fetcher:
         """GET url; None when blocked by robots.txt, on network error or non-2xx status."""
         if not await self.allowed(url):
             self.stats["robots_blocked"] += 1
+            self.failures[url] = "robots_blocked"
             log.info("robots.txt disallows %s", url)
             return None
         resp = await self._request(url)
         if resp is None:
             self.stats["errors"] += 1
+            self.failures.setdefault(url, "network_error")
             return None
         if resp.status_code >= 400:
             self.stats[f"http_{resp.status_code}"] += 1
+            self.failures[url] = f"http_{resp.status_code}"
             log.debug("HTTP %s for %s", resp.status_code, url)
             return None
         self.stats["ok"] += 1

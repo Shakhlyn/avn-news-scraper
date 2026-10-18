@@ -11,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
+
+from .adapters import find_adapter
 from .classify import Classifier
 from .config import Config, Source
 from .dedupe import find_cluster
@@ -73,20 +76,46 @@ def _assign_sources(candidates: list[Candidate], sources: list[Source]) -> None:
                 c.source_id = owner.id
 
 
+# Failures that will not go away by retrying tomorrow (vs. timeouts, 5xx, 429).
+_PERMANENT_FAILURES = {"http_401", "http_403", "http_404", "http_410", "http_451", "robots_blocked",
+                       "BlockedURL", "UnsupportedEncoding", "ResponseTooLarge", "not_html",
+                       "extract_error", "adapter_error"}
+
+
 async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | None, Extracted | None]:
+    """Download and extract one article. On failure the reason is in fetcher.failures[c.url]."""
+    adapter = find_adapter(c.url)
+    if adapter is not None:
+        site, api_url = adapter
+        resp = await fetcher.get(api_url)
+        if resp is None:
+            fetcher.failures[c.url] = fetcher.failures.get(api_url, "network_error")
+            return c, None, None
+        try:
+            return c, resp.text, site.parse(resp.content)
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            log.warning("%s adapter could not parse %s: %r", site.name, api_url, exc)
+            fetcher.failures[c.url] = "adapter_error"
+            return c, None, None
+
     resp = await fetcher.get(c.url)
-    if resp is None or "html" not in resp.headers.get("content-type", "html"):
+    if resp is None:
+        return c, None, None
+    if "html" not in resp.headers.get("content-type", "html"):
+        fetcher.failures[c.url] = "not_html"
         return c, None, None
     html = resp.text
     try:
         ex = await asyncio.to_thread(extract, html, str(resp.url))
     except Exception as exc:
         log.warning("extraction failed for %s: %r", c.url, exc)
+        fetcher.failures[c.url] = "extract_error"
         return c, html, None
     return c, html, ex
 
 
-async def run_pipeline(cfg: Config, opts: RunOptions) -> RunResult:
+async def run_pipeline(cfg: Config, opts: RunOptions,
+                       transport: httpx.AsyncBaseTransport | None = None) -> RunResult:
     s = cfg.settings
     tz = ZoneInfo(cfg.timezone)
     started = datetime.now(timezone.utc)
@@ -105,7 +134,7 @@ async def run_pipeline(cfg: Config, opts: RunOptions) -> RunResult:
     use_catchall = catchall_cfg.get("enabled", False) if opts.catchall is None else opts.catchall
     cache = EndpointCache(cfg.data_dir / "cache" / "endpoints.json", int(s.get("endpoint_cache_days", 7)))
 
-    async with Fetcher(s.get("http") or {}) as fetcher:
+    async with Fetcher(s.get("http") or {}, transport=transport) as fetcher:
         # 1. discover
         results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache) for src in sources))
         cache.save()
@@ -142,21 +171,32 @@ async def run_pipeline(cfg: Config, opts: RunOptions) -> RunResult:
         # 3. fetch & extract
         fetched = await asyncio.gather(*(_fetch_one(fetcher, c) for c in selected))
         stats["http"] = dict(fetcher.stats)
+        failures = dict(fetcher.failures)
 
     # 4. classify, cluster, store
     recent = storage.recent_titles(days=3)
     saved: list[dict[str, Any]] = []
     seen_rows: list[tuple[str, str, str]] = []
     outcome: Counter[str] = Counter()
+    failed: list[dict[str, str]] = []
     by_category: Counter[str] = Counter()
     scraped_at = datetime.now(timezone.utc)
 
     for c, html, ex in fetched:
         cid = article_id(c.url)
-        if ex is None and not (c.title and c.summary):
-            outcome["fetch_failed"] += 1
-            continue  # not marked seen: retried on the next run
         fetch_ok = ex is not None
+        reason = None if fetch_ok else failures.get(c.url, "network_error")
+        # Permanently blocked pages (403, robots.txt, ...) are judged on the headline we
+        # already have and not retried; temporary failures are retried tomorrow unless
+        # the feed gave us a summary to judge by.
+        permanent = reason in _PERMANENT_FAILURES
+        if not fetch_ok:
+            failed.append({"url": c.url, "reason": reason})
+            if not c.title or not (permanent or c.summary):
+                outcome["fetch_failed"] += 1
+                if permanent:
+                    seen_rows.append((cid, c.url, reason))
+                continue
         ex = ex or Extracted(c.title, "", c.summary, "", None, None, None)
         published = ex.published_at or c.published_at
         if published and published > scraped_at + timedelta(minutes=15):
@@ -173,9 +213,9 @@ async def run_pipeline(cfg: Config, opts: RunOptions) -> RunResult:
         summary = ex.summary or c.summary
         matches = classifier.classify(title, ex.body, summary)
         if not matches:
-            if fetch_ok:
+            if fetch_ok or permanent:
                 outcome["no_match"] += 1
-                seen_rows.append((cid, c.url, "no_match"))
+                seen_rows.append((cid, c.url, "no_match" if fetch_ok else f"no_match ({reason})"))
             else:
                 outcome["fetch_failed"] += 1  # retried next run with the full text
             continue
@@ -220,11 +260,14 @@ async def run_pipeline(cfg: Config, opts: RunOptions) -> RunResult:
             storage.save_article(record, html)
         saved.append(record)
         outcome["saved"] += 1
+        if not ex.body:
+            outcome["saved_headline_only"] += 1
         by_category.update(m.category for m in matches)
 
     if not opts.dry_run:
         storage.mark_seen(seen_rows)
     stats["outcome"] = dict(outcome)
+    stats["fetch_failed"] = failed[:100]
     stats["by_category"] = dict(by_category)
 
     # 5. export + run log

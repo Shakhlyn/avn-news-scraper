@@ -39,6 +39,17 @@ def _neutralize(value):
     return value
 
 
+def _sheet_name(label: str, used: set[str]) -> str:
+    """Excel sheet names: max 31 chars, none of []:*?/\\, unique."""
+    name = "".join("-" if ch in '[]:*?/\\' else ch for ch in label).strip()[:31] or "Sheet"
+    base, n = name, 2
+    while name.lower() in used:
+        suffix = f" ({n})"
+        name, n = base[:31 - len(suffix)] + suffix, n + 1
+    used.add(name.lower())
+    return name
+
+
 def _write_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False, encoding="utf-8-sig")
@@ -70,10 +81,11 @@ def export_all(storage: Storage, exports_dir: Path, labels: dict[str, str], tz: 
                               aggfunc="nunique", fill_value=0)
                  .sort_index(ascending=False))
 
+    used = {"summary (per month)", "all"}
     with pd.ExcelWriter(exports_dir / "master.xlsx", engine="openpyxl") as xl:
         summary.to_excel(xl, sheet_name="Summary (per month)")
         all_articles.to_excel(xl, sheet_name="All", index=False)
         for category, group in df.groupby("category"):
-            group.to_excel(xl, sheet_name=labels.get(category, category)[:31].replace("/", "-"), index=False)
+            group.to_excel(xl, sheet_name=_sheet_name(labels.get(category, category), used), index=False)
     counts["articles"] = len(all_articles)
     return counts

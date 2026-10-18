@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -54,6 +55,25 @@ def _meta_date(tree: HTMLParser) -> datetime | None:
     return _parse_dt(time_node.attributes.get("datetime")) if time_node is not None else None
 
 
+def _ld_article_body(tree: HTMLParser) -> str:
+    """Longest schema.org articleBody in the page's JSON-LD (most news CMSs publish one)."""
+    best = ""
+    for script in tree.css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(script.text(), strict=False)
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            data = data.get("@graph", [data])
+        for item in data if isinstance(data, list) else []:
+            body = item.get("articleBody") if isinstance(item, dict) else None
+            if isinstance(body, str) and len(body) > len(best):
+                best = body
+    if "<" in best:
+        best = HTMLParser(best).text(separator="\n")
+    return best.strip()
+
+
 def extract(html: str, url: str) -> Extracted:
     tree = HTMLParser(html)
     doc = trafilatura.bare_extraction(html, url=url, with_metadata=True,
@@ -62,13 +82,20 @@ def extract(html: str, url: str) -> Extracted:
         doc = doc.as_dict()
     doc = doc or {}
 
+    body = (doc.get("text") or "").strip()
+    # trafilatura sometimes keeps only part of the story; prefer the publisher's own
+    # full text when it is clearly longer.
+    ld_body = _ld_article_body(tree)
+    if len(ld_body) > 1.2 * len(body):
+        body = ld_body
+
     canonical = tree.css_first('link[rel="canonical"]')
     og_title = tree.css_first('meta[property="og:title"]')
     title = doc.get("title") or (og_title.attributes.get("content") if og_title is not None else "") or ""
 
     return Extracted(
         title=title.strip(),
-        body=(doc.get("text") or "").strip(),
+        body=body,
         summary=(doc.get("description") or "").strip(),
         author=(doc.get("author") or "").strip(),
         published_at=_meta_date(tree) or _parse_dt(doc.get("date")),

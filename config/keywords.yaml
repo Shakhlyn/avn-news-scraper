@@ -135,7 +135,7 @@ categories:
       - রিমান্ড
 
   kneecapping:
-    label: Kneecapping (shooting in the leg)
+    label: Kneecapping
     strong:
       - kneecapping
       - knee-capping
@@ -178,7 +178,7 @@ categories:
       - ফাঁসির
 
   digital_security_act:
-    label: Digital Security Act / Cyber laws
+    label: DSA and cyber laws
     strong:
       - digital security act
       - cyber security act

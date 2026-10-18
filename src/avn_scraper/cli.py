@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,7 @@ from .config import load_config
 from .discover.sources import EndpointCache, discover_source
 from .export import export_all
 from .fetch import Fetcher
+from .lock import RunInProgress, run_lock
 from .pipeline import RunOptions, reclassify, run_pipeline
 from .storage import LocalStorage
 
@@ -54,7 +56,12 @@ def run(
     cfg = load_config(config)
     opts = RunOptions(since_hours=since, dry_run=dry_run, prefilter=not no_prefilter,
                       only_sources=_split(sources), catchall=catchall)
-    result = asyncio.run(run_pipeline(cfg, opts))
+    try:
+        with run_lock(cfg.data_dir / ".run.lock"):
+            result = asyncio.run(run_pipeline(cfg, opts))
+    except RunInProgress as exc:
+        console.print(f"[yellow]A scrape is already running ({exc}); not starting another.[/]")
+        raise typer.Exit(1)
 
     st = result.stats
     failed = [sid for sid, info in st.get("sources", {}).items() if not info["ok"]]
@@ -67,8 +74,13 @@ def run(
         console.print("By category:", st["by_category"])
     if failed:
         console.print(f"[yellow]Sources with no results ({len(failed)}):[/] {', '.join(failed)}")
-    if dry_run and result.saved:
-        table = Table("date", "source", "categories", "title", show_lines=False)
+    if st.get("fetch_failed"):
+        reasons = Counter(f["reason"] for f in st["fetch_failed"])
+        console.print(f"Downloads that failed: {dict(reasons)} "
+                      "(blocked pages are judged by headline; temporary errors retry next run)")
+    if result.saved:
+        title = "Would save (dry run)" if dry_run else f"Saved to {cfg.data_dir}"
+        table = Table("date", "source", "categories", "title", title=title, show_lines=False)
         for r in result.saved:
             table.add_row(r["published_date"], r["source_name"],
                           ", ".join(f"{c['category']}({c['score']})" for c in r["categories"]),
@@ -129,7 +141,12 @@ def export(
 def reclassify_cmd(config: Optional[Path] = ConfigOpt) -> None:
     """Re-apply keywords.yaml to stored articles, then rebuild exports."""
     cfg = load_config(config)
-    counts = reclassify(cfg)
+    try:
+        with run_lock(cfg.data_dir / ".run.lock"):
+            counts = reclassify(cfg)
+    except RunInProgress as exc:
+        console.print(f"[yellow]A scrape is running ({exc}); try again when it finishes.[/]")
+        raise typer.Exit(1)
     console.print(dict(counts))
     export(day=None, config=config)
 
@@ -139,6 +156,10 @@ def stats(config: Optional[Path] = ConfigOpt) -> None:
     """Article counts per category and per source."""
     cfg = load_config(config)
     storage = LocalStorage(cfg.data_dir)
+    if storage.query_df("SELECT COUNT(*) AS n FROM articles")["n"][0] == 0:
+        console.print("No articles saved yet. Run `avn run` first.")
+        storage.close()
+        return
     console.print(storage.query_df(
         "SELECT category, COUNT(*) AS articles, MIN(published_date) AS first, MAX(published_date) AS last "
         "FROM v_matches GROUP BY category ORDER BY articles DESC").to_string(index=False))

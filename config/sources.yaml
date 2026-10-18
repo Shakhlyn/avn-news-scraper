@@ -17,8 +17,9 @@
 # Outlets marked "403 bot protection" block automated requests (even with a browser
 # User-Agent), so they are disabled. Their articles can still be picked up as
 # headline + snippet through the optional search catch-all (settings.yaml).
-# Dhaka Post blocks article pages but leaves its RSS open, so for it headline +
-# RSS summary is stored (body_missing = 1).
+# Dhaka Post and Jugantor block article pages but leave RSS / sitemap open, so
+# matching articles are stored from the headline (+ RSS summary) with body_missing = 1.
+# Channel 24 renders pages with JavaScript; it is read through its API (adapters.py).
 
 sources:
   # ---------- Bangla national dailies ----------
@@ -29,7 +30,7 @@ sources:
   - {id: ittefaq, name: Ittefaq, language: bn, type: national, homepage: "https://www.ittefaq.com.bd/"}
   - {id: bdpratidin, name: Bangladesh Pratidin, language: bn, type: national, homepage: "https://www.bd-pratidin.com/", enabled: false}  # 403 bot protection (2026-10)
   - {id: janakantha, name: Janakantha, language: bn, type: national, homepage: "https://www.dailyjanakantha.com/"}
-  - {id: nayadiganta, name: Naya Diganta, language: bn, type: national, homepage: "https://www.dailynayadiganta.com/"}
+  - {id: nayadiganta, name: Naya Diganta, language: bn, type: national, homepage: "https://dailynayadiganta.com/"}
   - {id: manabzamin, name: Manab Zamin, language: bn, type: national, homepage: "https://mzamin.com/"}
   - {id: deshrupantor, name: Desh Rupantor, language: bn, type: national, homepage: "https://www.deshrupantor.com/"}
   - {id: inqilab, name: Daily Inqilab, language: bn, type: national, homepage: "https://dailyinqilab.com/"}

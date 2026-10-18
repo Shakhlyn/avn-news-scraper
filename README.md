@@ -44,12 +44,18 @@ Use `.venv/bin/avn`, or activate the venv first.
 
 1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, RSS feeds and news sitemaps. Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
-3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date.
+3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).
 5. **Store**: one JSON file per article, the raw HTML (gzipped), and a row in SQLite. The same story from different outlets gets the same `story_cluster_id`, and the district is guessed from the text.
 6. **Export**: daily CSV, one CSV per category, and `master.xlsx`.
 
 URLs that were checked and didn't match are remembered, so they aren't downloaded again.
+
+If an article page can't be downloaded:
+- **Permanent failure** (403 bot protection, 404, robots.txt): the article is judged by its headline (and feed summary, if any). It is saved with `body_missing = 1` if it matches, and is not retried.
+- **Temporary failure** (timeout, server error): it is retried on the next run.
+
+The run log lists every failed download with its reason.
 
 ## Data layout
 
@@ -57,12 +63,12 @@ URLs that were checked and didn't match are remembered, so they aren't downloade
 data/
   db/news.sqlite                         master index (SQL / pandas)
   articles/YYYY/MM/DD/<source>/<id>.json full record: text, metadata, matched keywords
-  raw/YYYY/MM/DD/<source>/<id>.html.gz   original page, for re-parsing later
+  raw/YYYY/MM/DD/<source>/<id>.html.gz   original page, for re-parsing later (.json.gz for API-read sites)
   exports/
     daily/YYYY-MM-DD.csv                 articles found that day
     by_category/<category>.csv           everything so far, one file per topic
     master.xlsx                          Summary per month, All, one sheet per topic
-  logs/runs/YYYY-MM-DD_HHMMSS.json       per-run stats (sources ok/failed, counts)
+  logs/runs/YYYY-MM-DD_HHMMSS.json       per-run stats (sources ok/failed, counts, failed downloads)
   cache/endpoints.json                   auto-discovered feeds/sitemaps
 ```
 
@@ -110,7 +116,7 @@ Spot-check the daily CSV for the first week or two, mark false positives in `rev
 ## Sources and limitations
 
 - `config/sources.yaml` lists ~60 outlets. Add one with just an `id`, `name`, `language`, `type` and `homepage`; feeds are discovered automatically. Then run `avn check-sources --sources <id>`.
-- **Blocked outlets.** As of Oct 2026, these return HTTP 403 to every automated request because of Cloudflare bot protection: Kaler Kantho, Bangladesh Pratidin, Kalbela, Jai Jai Din, Banglanews24, Somoy TV, Jamuna TV, Daily Sun, Netra News, Jago News and Risingbd. They are `enabled: false`. Dhaka Post blocks its article pages, so only the headline and RSS summary are stored (`body_missing = 1`).
+- **Blocked outlets.** As of Oct 2026, these return HTTP 403 to every automated request because of Cloudflare bot protection: Kaler Kantho, Bangladesh Pratidin, Kalbela, Jai Jai Din, Banglanews24, Somoy TV, Jamuna TV, Daily Sun, Netra News, Jago News and Risingbd. They are `enabled: false`. Dhaka Post and Jugantor block their article pages but leave an RSS feed or sitemap open, so matching articles are stored from the headline (plus RSS summary for Dhaka Post) with `body_missing = 1`.
 - **Search catch-all.** This is off by default (`settings.yaml → search_catchall`). It runs the queries in `keywords.yaml → catchall_queries` against Bing News RSS. That finds articles from blocked outlets (stored as headline and snippet) and from small or local outlets that aren't configured. Bing's feed terms allow "personal, non-commercial use", so check that your use fits before enabling it. Results can include foreign outlets (`source_type = 'web'`). Google News RSS is not used because its robots.txt disallows automated access.
 - Pre-filtering is based on headlines and summaries. An article whose headline has no keyword and whose site gives no summary can be missed. `--no-prefilter` downloads everything but is much slower.
 
@@ -124,7 +130,7 @@ systemctl --user start avn-scraper        # or: run the scheduled job now, in th
 journalctl --user -u avn-scraper -f       # watch the scheduled job's log
 ```
 
-A manual run doesn't disturb the schedule. Articles already saved are skipped, so running more often than daily is safe.
+A manual run doesn't disturb the schedule. Articles already saved are skipped, so running more often than daily is safe. Only one run can happen at a time: if the 07:00 job is running, `avn run` (and `avn reclassify`) says so and exits.
 
 ## Scheduling
 

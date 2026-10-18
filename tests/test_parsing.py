@@ -91,3 +91,35 @@ def test_extract():
     assert "police custody" in ex.body
     assert ex.canonical_url == "https://example.com/n/1"
     assert ex.published_at == datetime(2026, 10, 18, 1, 30, tzinfo=timezone.utc)
+
+
+def test_channel24_adapter():
+    import json
+
+    from avn_scraper.adapters import find_adapter
+
+    url = "https://www.channel24bd.tv/national/article/353669/%E0%A6%B8%E0%A7%8C%E0%A6%A6%E0%A6%BF"
+    adapter, api = find_adapter(url)
+    assert api == "https://backoffice.channel24bd.tv/api/v2/content-details/national/353669"
+    assert find_adapter("https://www.prothomalo.com/bangladesh/abc") is None
+
+    payload = json.dumps({
+        "contentDetails": [{"ContentHeading": "দুই বাংলাদেশির মৃত্যুদণ্ড", "ContentBrief": "সংক্ষেপ",
+                            "ContentDetails": "<p><strong>ঢাকা:</strong> প্রথম অনুচ্ছেদ।</p><p>দ্বিতীয়।</p>",
+                            "WriterName": "ডেস্ক", "create_date": "2026-10-18 16:02:19"}],
+        "writerInfo": {"WriterName": "বিশেষ প্রতিনিধি"},
+    }).encode()
+    ex = adapter.parse(payload)
+    assert ex.title == "দুই বাংলাদেশির মৃত্যুদণ্ড"
+    assert ex.body == "ঢাকা: প্রথম অনুচ্ছেদ।\nদ্বিতীয়।"
+    assert ex.author == "বিশেষ প্রতিনিধি"
+    assert ex.published_at == datetime(2026, 10, 18, 10, 2, 19, tzinfo=timezone.utc)
+
+
+def test_extract_prefers_longer_json_ld_body():
+    long_text = "সীমান্তে বিএসএফের গুলিতে যুবক নিহত হয়েছেন। " * 40
+    html = f"""<html><head><script type="application/ld+json">
+    {{"@context": "https://schema.org", "@type": "NewsArticle", "articleBody": "{long_text}"}}
+    </script></head><body><article><h1>শিরোনাম</h1><p>সংক্ষিপ্ত অংশ মাত্র।</p></article></body></html>"""
+    ex = extract(html, "https://example.com/n/2")
+    assert len(ex.body) >= len(long_text.strip()) - 5

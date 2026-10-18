@@ -3,7 +3,7 @@
 data/
   db/news.sqlite
   articles/YYYY/MM/DD/<source>/<id>.json
-  raw/YYYY/MM/DD/<source>/<id>.html.gz
+  raw/YYYY/MM/DD/<source>/<id>.html.gz   (.json.gz for sites read through an API adapter)
 """
 
 from __future__ import annotations
@@ -181,7 +181,8 @@ class LocalStorage(Storage):
         json_rel = rel_dir / f"{record['id']}.json"
         record["json_path"] = str(json_rel)
         if raw_html:
-            raw_rel = self._rel_dir("raw", record) / f"{record['id']}.html.gz"
+            ext = "json" if raw_html.lstrip().startswith(("{", "[")) else "html"
+            raw_rel = self._rel_dir("raw", record) / f"{record['id']}.{ext}.gz"
             (self.root / raw_rel).parent.mkdir(parents=True, exist_ok=True)
             with gzip.open(self.root / raw_rel, "wt", encoding="utf-8") as fh:
                 fh.write(raw_html)
