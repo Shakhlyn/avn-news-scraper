@@ -28,6 +28,17 @@ ORDER BY a.published_date DESC, c.category, c.score DESC
 """
 
 
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize(value):
+    """Titles/excerpts come from the web: a leading = + - @ would run as a formula in
+    Excel/LibreOffice (openpyxl even writes "=..." strings as live formulas)."""
+    if isinstance(value, str) and value.startswith(_FORMULA_START):
+        return "'" + value
+    return value
+
+
 def _write_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False, encoding="utf-8-sig")
@@ -35,7 +46,7 @@ def _write_csv(df: pd.DataFrame, path: Path) -> None:
 
 def export_all(storage: Storage, exports_dir: Path, labels: dict[str, str], tz: str,
                day: date | None = None) -> dict[str, int]:
-    df = storage.query_df(_MATCHES_SQL)
+    df = storage.query_df(_MATCHES_SQL).map(_neutralize)
     counts = {"rows": len(df)}
     if df.empty:
         return counts

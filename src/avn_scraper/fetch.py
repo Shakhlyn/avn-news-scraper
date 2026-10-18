@@ -1,8 +1,14 @@
-"""Polite async HTTP client: per-site pacing, robots.txt, retries."""
+"""Polite async HTTP client: per-site pacing, robots.txt, retries.
+
+URLs come from untrusted pages (feed items, search results, redirects), so every
+request - including each redirect hop - must go to a public address, and bodies
+are capped in size while streaming (this also bounds gzip Content-Encoding).
+"""
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from collections import Counter, defaultdict
@@ -13,15 +19,34 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+_DROP_HEADERS = ("content-encoding", "content-length", "transfer-encoding")
+
+
+class BlockedURL(Exception):
+    """Non-http(s) URL or one that resolves to a private/loopback/link-local address."""
+
+
+class ResponseTooLarge(Exception):
+    pass
+
+
+def _is_public_ip(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_global
+    except ValueError:
+        return False
+
 
 class Fetcher:
-    def __init__(self, http_settings: dict):
+    def __init__(self, http_settings: dict, transport: httpx.AsyncBaseTransport | None = None):
         s = http_settings
         self.user_agent = s.get("user_agent", "AVNNewsScraper/0.1")
         self.robots_agent = s.get("robots_agent", "AVNNewsScraper")
         self.per_host_delay = float(s.get("per_host_delay", 1.0))
         self.retries = int(s.get("retries", 2))
         self.respect_robots = bool(s.get("respect_robots", True))
+        self.max_bytes = int(float(s.get("max_response_mb", 20)) * 1024 * 1024)
+        self._public_hosts: dict[str, bool] = {}
         self._client = httpx.AsyncClient(
             headers={
                 "User-Agent": self.user_agent,
@@ -30,6 +55,8 @@ class Fetcher:
             },
             timeout=float(s.get("timeout_seconds", 25)),
             follow_redirects=True,
+            event_hooks={"request": [self._check_target]},
+            transport=transport,
         )
         self._sem = asyncio.Semaphore(int(s.get("concurrency", 12)))
         self._host_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -43,6 +70,36 @@ class Fetcher:
 
     async def __aexit__(self, *exc) -> None:
         await self._client.aclose()
+
+    async def _check_target(self, request: httpx.Request) -> None:
+        """httpx request hook: runs for the first request and for every redirect."""
+        if request.url.scheme not in ("http", "https"):
+            raise BlockedURL(str(request.url))
+        host = request.url.host
+        if host not in self._public_hosts:
+            try:
+                ipaddress.ip_address(host)
+                public = _is_public_ip(host)
+            except ValueError:
+                try:
+                    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+                    public = all(_is_public_ip(info[4][0]) for info in infos)
+                except OSError:
+                    public = True  # unresolvable: let the request fail normally
+            self._public_hosts[host] = public
+        if not self._public_hosts[host]:
+            raise BlockedURL(str(request.url))
+
+    async def _get_capped(self, url: str) -> httpx.Response:
+        async with self._client.stream("GET", url) as r:
+            body = bytearray()
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > self.max_bytes:
+                    raise ResponseTooLarge(url)
+            # aiter_bytes already decoded the body; drop the encoding headers to match.
+            headers = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in _DROP_HEADERS]
+            return httpx.Response(r.status_code, headers=headers, content=bytes(body), request=r.request)
 
     async def _robots_for(self, url: str) -> RobotFileParser | None:
         parts = urlsplit(url)
@@ -76,7 +133,11 @@ class Fetcher:
                     await asyncio.sleep(wait)
                 try:
                     async with self._sem:
-                        resp = await self._client.get(url)
+                        resp = await self._get_capped(url)
+                except (BlockedURL, ResponseTooLarge) as exc:
+                    self.stats[type(exc).__name__] += 1
+                    log.warning("not fetching %s: %s", url, type(exc).__name__)
+                    return None
                 except httpx.HTTPError as exc:
                     resp = None
                     log.debug("fetch error %s: %r", url, exc)

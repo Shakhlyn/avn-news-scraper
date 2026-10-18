@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-import gzip
 import re
+import zlib
 from datetime import datetime, timedelta, timezone
 
 from lxml import etree
 
 from ..fetch import Fetcher
+from ..urls import same_site
 from . import Candidate
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, recover=True, huge_tree=False)
 _MAX_CHILDREN = 4
 _MAX_UNDATED = 300
+_MAX_XML_BYTES = 50 * 1024 * 1024
+
+
+def _gunzip(content: bytes) -> bytes:
+    """Decompress a .gz sitemap, refusing to inflate past _MAX_XML_BYTES (gzip bombs)."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(content, _MAX_XML_BYTES)
+    if d.unconsumed_tail:
+        raise ValueError("sitemap larger than size limit")
+    return out
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -38,7 +49,7 @@ def _text(el, path: str) -> str | None:
 def parse_sitemap(content: bytes) -> tuple[list[tuple[str, datetime | None]], list[dict]]:
     """Return (child sitemaps [(loc, lastmod)], url entries [{loc,title,published_at}])."""
     if content[:2] == b"\x1f\x8b":
-        content = gzip.decompress(content)
+        content = _gunzip(content)
     root = etree.fromstring(content, parser=_PARSER)
     if root is None:
         return [], []
@@ -87,9 +98,10 @@ async def discover_sitemap(fetcher: Fetcher, url: str, source_id: str, cutoff: d
         return []
     try:
         children, entries = parse_sitemap(resp.content)
-    except (etree.XMLSyntaxError, OSError, ValueError):
+    except (etree.XMLSyntaxError, OSError, ValueError, zlib.error):
         return []
     out: list[Candidate] = []
+    children = [c for c in children if same_site(c[0], url)]
     if children and _depth < 2:
         for child in _pick_children(children, cutoff):
             out += await discover_sitemap(fetcher, child, source_id, cutoff, _depth + 1)

@@ -15,9 +15,10 @@ BING_URL = "https://www.bing.com/news/search?q={q}&format=rss&cc=BD&qft=sortbyda
 def unwrap_bing_link(link: str) -> str:
     """Bing wraps results as apiclick.aspx?...&url=<real url>."""
     parts = urlsplit(link)
-    if "bing.com" in parts.netloc:
+    host = (parts.hostname or "").lower()
+    if host == "bing.com" or host.endswith(".bing.com"):
         target = parse_qs(parts.query).get("url")
-        if target:
+        if target and urlsplit(target[0]).scheme in ("http", "https"):
             return target[0]
     return link
 

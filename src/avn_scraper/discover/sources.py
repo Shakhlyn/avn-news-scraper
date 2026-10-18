@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..config import Source
 from ..fetch import Fetcher
+from ..urls import same_site
 from . import Candidate
 from .listing import discover_listing, find_feed_links
 from .rss import discover_feed
@@ -89,9 +90,11 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime,
             if cached is not None:
                 feeds, sitemaps = cached["feeds"], cached["sitemaps"]
             else:
+                # Only the outlet's own feeds/sitemaps: pages can point anywhere.
                 links = find_feed_links(homepage_html, source.homepage) if homepage_html else []
-                feeds = [u for u in links if "comment" not in u.lower()][:2]
-                sitemaps = _rank_sitemaps(await fetcher.robots_sitemaps(source.homepage))
+                feeds = [u for u in links if "comment" not in u.lower() and same_site(u, source.homepage)][:2]
+                robots = await fetcher.robots_sitemaps(source.homepage)
+                sitemaps = _rank_sitemaps([u for u in robots if same_site(u, source.homepage)])
                 if homepage_html:  # only cache when the site actually answered
                     cache.set(source.id, feeds, sitemaps)
         result.endpoints = {"feeds": feeds, "sitemaps": sitemaps}

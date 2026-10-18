@@ -14,6 +14,7 @@ http:
   per_host_delay: 1.0      # seconds between requests to the same site
   retries: 2
   respect_robots: true
+  max_response_mb: 20      # larger responses are dropped
 
 # Upper bound on full-article downloads per outlet per run (after keyword pre-filter).
 max_articles_per_source: 80
