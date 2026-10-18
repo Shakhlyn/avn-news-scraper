@@ -1,0 +1,31 @@
+# Runtime settings. Paths are relative to the project root unless absolute.
+timezone: Asia/Dhaka
+data_dir: data
+
+# How far back to look on each run. The job runs daily, so 30h gives a 6h overlap;
+# already-seen URLs are skipped, so the overlap costs nothing.
+window_hours: 30
+
+http:
+  user_agent: "Mozilla/5.0 (compatible; AVNNewsScraper/0.1; human-rights news monitoring)"
+  robots_agent: AVNNewsScraper
+  timeout_seconds: 25
+  concurrency: 12          # total parallel requests
+  per_host_delay: 1.0      # seconds between requests to the same site
+  retries: 2
+  respect_robots: true
+
+# Upper bound on full-article downloads per outlet per run (after keyword pre-filter).
+max_articles_per_source: 80
+
+# Keep the auto-discovered feed/sitemap URLs this many days before re-discovering.
+endpoint_cache_days: 7
+
+# Catch-all search across *all* outlets (finds minor/local papers not in sources.yaml).
+# Uses Bing News RSS. Bing's feed terms allow "personal, non-commercial use" in an RSS
+# aggregator, so check that your use fits before enabling. (Google News RSS is not used:
+# its robots.txt disallows automated access to /rss.)
+search_catchall:
+  enabled: false
+  provider: bing
+  max_items: 200

@@ -1,0 +1,269 @@
+# Topic keyword rules.
+#
+# Each category has:
+#   strong:  phrases that on their own make an article relevant (weight 4)
+#   weak:    supporting phrases; need several hits or a headline hit (weight 1)
+#   exclude: phrases that veto the category (use sparingly)
+#
+# Scoring: each matched term adds weight x min(body occurrences, 3), plus weight x 2
+# when it appears in the headline. An article belongs to a category when the
+# score is >= min_score AND at least one strong term matched (require_strong).
+# Weak terms alone never qualify an article; they raise the score of articles
+# that have a strong hit. One article can belong to several categories.
+#
+# Matching is done on normalized text: lower-cased, Unicode NFC, Bangla digits
+# turned into ASCII digits (৫৭ -> 57), zero-width joiners removed. Spaces in a
+# phrase match any whitespace. English phrases match whole words (a trailing
+# plural "s" is allowed); Bangla phrases match at a word start and allow any
+# suffix (গুলি -> গুলিতে, গুলির).
+#
+# Prefix a term with "re:" to write a Python regular expression instead.
+#
+# After editing, run `avn reclassify` to re-apply the rules to stored articles.
+
+settings:
+  min_score: 4
+  strong_weight: 4
+  weak_weight: 1
+  title_bonus: 2
+  body_cap: 3
+  require_strong: true
+
+categories:
+  extrajudicial_killing:
+    label: Extrajudicial killing
+    strong:
+      - extrajudicial
+      - extra-judicial
+      - extra judicial
+      - crossfire
+      - cross-fire
+      - encounter killing
+      - "re:(gunfight|gun ?battle|shootout|shoot-out|exchange of fire|encounter)\\W+(\\w+\\W+){0,3}(with|between|involving)\\W+(the\\W+)?(rab|police|detective|db|bgb|army|coast ?guard|joint forces|law enforcers)"
+      - বিচারবহির্ভূত
+      - বিচার বহির্ভূত
+      - বিচারবহির্ভুত
+      - ক্রসফায়ার
+      - ক্রস ফায়ার
+      - বন্দুকযুদ্ধ
+      - বন্দুক যুদ্ধ
+      - "re:(র‍?্যাব|পুলিশ|ডিবি|যৌথ বাহিনী)\\S*\\s+(\\S+\\s+){0,3}(সঙ্গে|সাথে)\\s+(\\S+\\s+){0,2}(গোলাগুলি|বন্দুকযুদ্ধ)"
+    weak:
+      - gunfight
+      - shootout
+      - killed in encounter
+      - গোলাগুলিতে নিহত
+      - এনকাউন্টার
+      - শুটআউট
+
+  border_killing:
+    label: Border killing
+    strong:
+      - border killing
+      - killed by bsf
+      - shot dead by bsf
+      - bsf firing
+      - bsf fire
+      - bsf killing
+      - bsf torture
+      - "re:(killed|shot|beaten|tortured|injured)\\W+(\\w+\\W+){0,4}(by\\W+)?(indian\\W+)?(bsf|border security force)"
+      - "re:(bsf|border security force)\\W+(\\w+\\W+){0,3}(shot|shoots|opened fire|fired|kill|killed|beat|beats|tortured)"
+      - সীমান্ত হত্যা
+      - সীমান্তে হত্যা
+      - বিএসএফের গুলি
+      - বিএসএফের নির্যাতন
+      - বিএসএফের হাতে নিহত
+      - "re:সীমান্তে\\S*\\s+(\\S+\\s+){0,4}(নিহত|গুলিবিদ্ধ|গুলিতে)"
+      - "re:বিএসএফ\\S*\\s+(\\S+\\s+){0,4}(গুলি|নির্যাতন|হত্যা|পিটিয়ে)"
+    weak:
+      - bsf
+      - border security force
+      - felani
+      - বিএসএফ
+      - ফেলানী
+      - সীমান্তে
+
+  enforced_disappearance:
+    label: Enforced disappearance
+    strong:
+      - enforced disappearance
+      - forced disappearance
+      - aynaghar
+      - aynaghor
+      - ayna ghar
+      - mayer daak
+      - "re:picked up by\\W+(\\w+\\W+){0,3}(plain ?clothes|plainclothes|law enforcers|men claiming)"
+      # গুম, excluding "লাশ গুম" / "মরদেহ গুম" (hiding a body)
+      - "re:(?<!লাশ )(?<!মরদেহ )(?<![\\u0980-\\u09ff])গুম(?:ের|ে|ও|ই|কৃত)?(?![\\u0980-\\u09ff])"
+      - আয়নাঘর
+      - আয়না ঘর
+      - মায়ের ডাক
+      - "re:সাদা পোশাক\\S*\\s+(\\S+\\s+){0,5}(তুলে নি|তুলে নে|আটক|ধরে নি)"
+    weak:
+      - disappeared
+      - disappearance
+      - abducted
+      - plainclothes
+      - তুলে নিয়ে
+      - নিখোঁজ
+      - সাদা পোশাক
+
+  custodial_torture_death:
+    label: Custodial torture and death
+    strong:
+      - custodial death
+      - custodial torture
+      - custodial killing
+      - death in custody
+      - torture in custody
+      - torture in remand
+      - "re:(death|died|dies|dead|killed|tortured)\\W+(\\w+\\W+){0,3}in\\W+(\\w+'?\\W+){0,2}custody"
+      - "re:tortur\\w*\\W+(\\w+\\W+){0,3}(in|during)\\W+(\\w+\\W+){0,2}(custody|remand)"
+      - হেফাজতে মৃত্যু
+      - হেফাজতে নির্যাতন
+      - রিমান্ডে নির্যাতন
+      - থানায় নির্যাতন
+      - কারাগারে মৃত্যু
+      - কারা হেফাজতে
+      - "re:হেফাজতে\\S*\\s+(\\S+\\s+){0,3}(মৃত্যু|নির্যাতন|মারা)"
+      - "re:(রিমান্ডে|থানায়|কারাগারে)\\S*\\s+(\\S+\\s+){0,3}(নির্যাতন|মৃত্যু|মারা)"
+    weak:
+      - in custody
+      - remand
+      - পুলিশ হেফাজতে
+      - হেফাজতে
+      - রিমান্ড
+
+  kneecapping:
+    label: Kneecapping (shooting in the leg)
+    strong:
+      - kneecapping
+      - knee-capping
+      - knee capping
+      - shot in the leg
+      - shot in his leg
+      - shot in the knee
+      - "re:shot\\W+(\\w+\\W+){0,3}(in|on)\\W+(the|his|her|their|both)\\W+(legs?|knees?)"
+      - পায়ে গুলি
+      - হাঁটুতে গুলি
+      - "re:(পায়ে|হাঁটুতে|পায়ের)\\s+(\\S+\\s+){0,2}গুলি"
+    weak:
+      - leg injury
+      - গুলিবিদ্ধ
+
+  death_penalty:
+    label: Death penalty
+    strong:
+      - death penalty
+      - death sentence
+      - sentenced to death
+      - death row
+      - death reference
+      - capital punishment
+      - condemned cell
+      - মৃত্যুদণ্ড
+      - মৃত্যুদন্ড
+      - ফাঁসির আদেশ
+      - ফাঁসির রায়
+      - ফাঁসির দণ্ড
+      - ফাঁসি কার্যকর
+      - কনডেম সেল
+      - ডেথ রেফারেন্স
+    weak:
+      - executed
+      - execution
+      - hanged
+      - gallows
+      - ফাঁসি
+      - ফাঁসির
+
+  digital_security_act:
+    label: Digital Security Act / Cyber laws
+    strong:
+      - digital security act
+      - cyber security act
+      - cybersecurity act
+      - cyber security ordinance
+      - cyber protection ordinance
+      - cyber safety ordinance
+      - ict act
+      - dsa case
+      - "re:section\\W+57"
+      - ডিজিটাল নিরাপত্তা আইন
+      - সাইবার নিরাপত্তা আইন
+      - সাইবার নিরাপত্তা অধ্যাদেশ
+      - সাইবার সুরক্ষা অধ্যাদেশ
+      - আইসিটি আইন
+      - তথ্যপ্রযুক্তি আইন
+      - ৫৭ ধারা
+    weak:
+      - "re:(?<![a-z])dsa(?![a-z])"
+      - cyber tribunal
+      - সাইবার ট্রাইব্যুনাল
+      - ডিজিটাল নিরাপত্তা
+
+  july_uprising:
+    label: July uprising (July 36)
+    strong:
+      - july uprising
+      - july revolution
+      - july movement
+      - july killings
+      - july martyrs
+      - july 36
+      - 36 july
+      - quota reform movement
+      - anti-discrimination student movement
+      - students against discrimination
+      - abu sayed
+      - abu sayeed
+      - জুলাই অভ্যুত্থান
+      - জুলাই গণঅভ্যুত্থান
+      - জুলাই বিপ্লব
+      - জুলাই আন্দোলন
+      - জুলাই শহীদ
+      - জুলাই যোদ্ধা
+      - জুলাই ৩৬
+      - ৩৬ জুলাই
+      - কোটা সংস্কার আন্দোলন
+      - বৈষম্যবিরোধী ছাত্র আন্দোলন
+      - আবু সাঈদ
+    weak:
+      # common in political speeches; only add weight to articles with a strong hit
+      - mass uprising
+      - july charter
+      - জুলাই সনদ
+      - গণঅভ্যুত্থান
+      - গণ-অভ্যুত্থান
+      - গণ অভ্যুত্থান
+      - crimes against humanity
+      - international crimes tribunal
+      - মানবতাবিরোধী অপরাধ
+      - আন্তর্জাতিক অপরাধ ট্রাইব্যুনাল
+      - "re:5 august|august 5|৫ আগস্ট|5 আগস্ট"
+
+# Queries for the optional search catch-all (settings.yaml -> search_catchall).
+# One search per line; keep them short and specific.
+catchall_queries:
+  - '"extrajudicial killing" Bangladesh'
+  - crossfire RAB OR police Bangladesh
+  - বন্দুকযুদ্ধ
+  - ক্রসফায়ার
+  - '"border killing" BSF'
+  - বিএসএফের গুলি
+  - সীমান্তে হত্যা
+  - '"enforced disappearance" Bangladesh'
+  - গুম
+  - আয়নাঘর
+  - '"custodial death" Bangladesh'
+  - হেফাজতে মৃত্যু
+  - রিমান্ডে নির্যাতন
+  - '"shot in the leg" Bangladesh police'
+  - পায়ে গুলি
+  - '"death sentence" Bangladesh'
+  - মৃত্যুদণ্ড
+  - '"Cyber Security" Act OR Ordinance Bangladesh case'
+  - ডিজিটাল নিরাপত্তা আইন
+  - সাইবার নিরাপত্তা আইন
+  - '"July uprising" Bangladesh'
+  - জুলাই অভ্যুত্থান

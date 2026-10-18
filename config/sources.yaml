@@ -1,0 +1,90 @@
+# News outlets to scan.
+#
+#   id:        short unique key (used in folder names)
+#   language:  bn | en
+#   type:      national | online | tv | regional | agency
+#   district:  for regional papers
+#   homepage:  always scanned for headline links
+#   feeds:     RSS/Atom URLs (optional)
+#   sitemaps:  sitemap / news-sitemap URLs (optional)
+#   sections:  extra listing pages to scan for headline links (e.g. crime, law, national)
+#   enabled:   set false to skip
+#
+# If feeds and sitemaps are both empty, they are auto-discovered from the homepage
+# <link rel="alternate"> tags and robots.txt "Sitemap:" lines, and cached.
+# Run `avn check-sources` to see what works for each outlet.
+#
+# Outlets marked "403 bot protection" block automated requests (even with a browser
+# User-Agent), so they are disabled. Their articles can still be picked up as
+# headline + snippet through the optional search catch-all (settings.yaml).
+# Dhaka Post blocks article pages but leaves its RSS open, so for it headline +
+# RSS summary is stored (body_missing = 1).
+
+sources:
+  # ---------- Bangla national dailies ----------
+  - {id: prothomalo, name: Prothom Alo, language: bn, type: national, homepage: "https://www.prothomalo.com/"}
+  - {id: jugantor, name: Jugantor, language: bn, type: national, homepage: "https://www.jugantor.com/"}
+  - {id: samakal, name: Samakal, language: bn, type: national, homepage: "https://samakal.com/"}
+  - {id: kalerkantho, name: Kaler Kantho, language: bn, type: national, homepage: "https://www.kalerkantho.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: ittefaq, name: Ittefaq, language: bn, type: national, homepage: "https://www.ittefaq.com.bd/"}
+  - {id: bdpratidin, name: Bangladesh Pratidin, language: bn, type: national, homepage: "https://www.bd-pratidin.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: janakantha, name: Janakantha, language: bn, type: national, homepage: "https://www.dailyjanakantha.com/"}
+  - {id: nayadiganta, name: Naya Diganta, language: bn, type: national, homepage: "https://www.dailynayadiganta.com/"}
+  - {id: manabzamin, name: Manab Zamin, language: bn, type: national, homepage: "https://mzamin.com/"}
+  - {id: deshrupantor, name: Desh Rupantor, language: bn, type: national, homepage: "https://www.deshrupantor.com/"}
+  - {id: inqilab, name: Daily Inqilab, language: bn, type: national, homepage: "https://dailyinqilab.com/"}
+  - {id: bonikbarta, name: Bonik Barta, language: bn, type: national, homepage: "https://bonikbarta.com/"}
+  - {id: ajkerpatrika, name: Ajker Patrika, language: bn, type: national, homepage: "https://www.ajkerpatrika.com/"}
+  - {id: dainikbangla, name: Dainik Bangla, language: bn, type: national, homepage: "https://www.dainikbangla.com.bd/"}
+  - {id: amardesh, name: Amar Desh, language: bn, type: national, homepage: "https://www.dailyamardesh.com/"}
+  - {id: kalbela, name: Kalbela, language: bn, type: national, homepage: "https://www.kalbela.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: jaijaidin, name: Jai Jai Din, language: bn, type: national, homepage: "https://www.jaijaidinbd.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: sangbad, name: Sangbad, language: bn, type: national, homepage: "https://sangbad.net/"}
+  - {id: dailysangram, name: Daily Sangram, language: bn, type: national, homepage: "https://dailysangram.com/"}
+  - {id: bangla_dailystar, name: The Daily Star Bangla, language: bn, type: national, homepage: "https://bangla.thedailystar.net/"}
+
+  # ---------- Bangla online portals ----------
+  - {id: bdnews24_bn, name: bdnews24.com Bangla, language: bn, type: online, homepage: "https://bangla.bdnews24.com/"}
+  - {id: banglanews24, name: Banglanews24, language: bn, type: online, homepage: "https://www.banglanews24.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: banglatribune, name: Bangla Tribune, language: bn, type: online, homepage: "https://www.banglatribune.com/"}
+  - {id: dhakapost, name: Dhaka Post, language: bn, type: online, homepage: "https://www.dhakapost.com/", feeds: ["https://www.dhakapost.com/rss/rss.xml"]}
+  - {id: jagonews24, name: Jago News 24, language: bn, type: online, homepage: "https://www.jagonews24.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: risingbd, name: Risingbd, language: bn, type: online, homepage: "https://www.risingbd.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: bangla_tribune_dt, name: Dhaka Tribune Bangla, language: bn, type: online, homepage: "https://bangla.dhakatribune.com/"}
+  - {id: netranews, name: Netra News, language: en, type: online, homepage: "https://netra.news/", enabled: false}  # 403 bot protection (2026-10)
+
+  # ---------- TV channel news portals ----------
+  - {id: somoytv, name: Somoy TV, language: bn, type: tv, homepage: "https://www.somoynews.tv/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: jamunatv, name: Jamuna TV, language: bn, type: tv, homepage: "https://jamuna.tv/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: channel24, name: Channel 24, language: bn, type: tv, homepage: "https://www.channel24bd.tv/"}
+  - {id: independenttv, name: Independent TV, language: bn, type: tv, homepage: "https://www.itvbd.com/"}
+  - {id: ekattortv, name: Ekattor TV, language: bn, type: tv, homepage: "https://ekattor.tv/"}
+  - {id: dbcnews, name: DBC News, language: bn, type: tv, homepage: "https://dbcnews.tv/"}
+  - {id: ntv, name: NTV, language: bn, type: tv, homepage: "https://www.ntvbd.com/"}
+  - {id: rtv, name: RTV, language: bn, type: tv, homepage: "https://www.rtvonline.com/"}
+  - {id: channeli, name: Channel i, language: bn, type: tv, homepage: "https://www.channelionline.com/"}
+  - {id: ekhontv, name: Ekhon TV, language: bn, type: tv, homepage: "https://www.ekhon.tv/"}
+  - {id: atnnews, name: ATN News, language: bn, type: tv, homepage: "https://www.atnnewstv.com/"}
+
+  # ---------- English ----------
+  - {id: dailystar, name: The Daily Star, language: en, type: national, homepage: "https://www.thedailystar.net/"}
+  - {id: dhakatribune, name: Dhaka Tribune, language: en, type: national, homepage: "https://www.dhakatribune.com/"}
+  - {id: tbsnews, name: The Business Standard, language: en, type: national, homepage: "https://www.tbsnews.net/"}
+  - {id: newage, name: New Age, language: en, type: national, homepage: "https://www.newagebd.net/"}
+  - {id: financialexpress, name: The Financial Express, language: en, type: national, homepage: "https://thefinancialexpress.com.bd/"}
+  - {id: dailysun, name: Daily Sun, language: en, type: national, homepage: "https://www.daily-sun.com/", enabled: false}  # 403 bot protection (2026-10)
+  - {id: observerbd, name: Daily Observer, language: en, type: national, homepage: "https://www.observerbd.com/"}
+  - {id: newnation, name: The New Nation, language: en, type: national, homepage: "https://thedailynewnation.com/"}
+  - {id: prothomalo_en, name: Prothom Alo English, language: en, type: national, homepage: "https://en.prothomalo.com/"}
+  - {id: bdnews24_en, name: bdnews24.com, language: en, type: online, homepage: "https://bdnews24.com/"}
+  - {id: unb, name: UNB, language: en, type: agency, homepage: "https://unb.com.bd/"}
+  - {id: bss, name: BSS, language: en, type: agency, homepage: "https://www.bssnews.net/"}
+
+  # ---------- Regional / local ----------
+  - {id: azadi, name: Dainik Azadi, language: bn, type: regional, district: Chattogram, homepage: "https://dainikazadi.net/"}
+  - {id: purbokone, name: Dainik Purbokone, language: bn, type: regional, district: Chattogram, homepage: "https://dainikpurbokone.net/"}
+  - {id: karatoa, name: Dainik Karatoa, language: bn, type: regional, district: Bogura, homepage: "https://www.dailykaratoa.com/"}
+  - {id: gramerkagoj, name: Gramer Kagoj, language: bn, type: regional, district: Jashore, homepage: "https://www.gramerkagoj.com/"}
+  - {id: purbanchal, name: Dainik Purbanchal, language: bn, type: regional, district: Khulna, homepage: "https://www.purbanchal.com/"}
+  - {id: sylheterdak, name: Sylheter Dak, language: bn, type: regional, district: Sylhet, homepage: "https://sylheterdak.com.bd/"}
+  - {id: coxsbazarnews, name: Cox's Bazar News, language: bn, type: regional, district: Cox's Bazar, homepage: "https://www.coxsbazarnews.com/"}

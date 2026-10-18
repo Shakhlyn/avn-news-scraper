@@ -1,0 +1,11 @@
+# Runs every day at 07:00 Bangladesh time, whatever the machine's timezone.
+# Persistent=true: if the machine was off at 07:00, run as soon as it is back on.
+[Unit]
+Description=Run AVN news scraper daily at 07:00 Asia/Dhaka
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 Asia/Dhaka
+Persistent=true
+
+[Install]
+WantedBy=timers.target
