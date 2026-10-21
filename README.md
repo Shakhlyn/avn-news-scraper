@@ -28,7 +28,7 @@ uv pip install -e ".[dev]"           # or: .venv/bin/pip install -e ".[dev]"
 ```bash
 avn run                      # the daily job: scrape, classify, save, export
 avn run --dry-run            # same, but only print what would be saved
-avn run --since 72           # look back 72 hours instead of the default 30
+avn run --since 72           # look back 72 hours instead of the default 24
 avn run --sources prothomalo,dailystar
 avn run --catchall           # also use the search catch-all for this run
 avn check-sources            # which outlets work, and through which feed/sitemap
@@ -42,7 +42,7 @@ Use `.venv/bin/avn`, or activate the venv first.
 
 ## How it works
 
-1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, every section tab, RSS feeds and news sitemaps. Section tabs (national, international, সারাদেশ, ...) are taken from the homepage menu on each run. Each tab's "next page" links are followed until it reaches articles an earlier run already saw, articles older than the window, or `sections.max_pages` (`settings.yaml`). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
+1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, the print edition, every top-level section tab, RSS feeds and news sitemaps. Tabs and the print edition are found on the homepage on each run, and each one is read page by page back to 24 hours ago. The rules are in [docs/scraping-rules.md](docs/scraping-rules.md). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
 3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).

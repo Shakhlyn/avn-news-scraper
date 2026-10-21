@@ -2,9 +2,9 @@
 timezone: Asia/Dhaka
 data_dir: data
 
-# How far back to look on each run. The job runs daily, so 30h gives a 6h overlap;
-# already-seen URLs are skipped, so the overlap costs nothing.
-window_hours: 30
+# How far back to look on each run. The job runs daily at 07:00 (Asia/Dhaka), so
+# 24h covers exactly the news since the previous run.
+window_hours: 24
 
 http:
   user_agent: "Mozilla/5.0 (compatible; AVNNewsScraper/0.1; human-rights news monitoring)"
@@ -19,15 +19,17 @@ http:
 # Upper bound on full-article downloads per outlet per run (after keyword pre-filter).
 max_articles_per_source: 80
 
-# Section tabs (national, international, সারাদেশ, ...). The homepage menu is read on
-# every run and each tab is scanned for headline links, together with any `sections:`
-# listed in sources.yaml. "Next page" links are followed until a page is mostly
-# articles already seen on an earlier run, its dated items are older than
-# window_hours, or max_pages is reached.
+# Section tabs and print edition. On every run the homepage is read for the print
+# edition / e-paper article list on the outlet's own site and for the top-level tabs
+# of the main menu (national, international, latest, ...; no sub-tabs, tags, videos,
+# logins). Each one is scanned together with any `sections:` from sources.yaml, and
+# its "next page" links are followed until its dated items are older than
+# window_hours, or it is mostly articles the previous run already saw.
+# See docs/scraping-rules.md.
 sections:
   auto_discover: true
-  max_per_source: 60   # tabs scanned per outlet (top-level tabs first, then sub-tabs)
-  max_pages: 5         # pages followed per tab
+  max_per_source: 60   # safety cap on tabs per outlet
+  max_pages: 20        # safety cap on pages per tab
 
 # Keep the auto-discovered feed/sitemap URLs this many days before re-discovering.
 endpoint_cache_days: 7

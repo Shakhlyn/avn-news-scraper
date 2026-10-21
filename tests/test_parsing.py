@@ -128,28 +128,58 @@ def test_extract_prefers_longer_json_ld_body():
 def test_find_section_links():
     from avn_scraper.discover.sections import find_section_links
 
-    html = """<html><body><header><nav class="main-menu">
-    <a href="/">প্রচ্ছদ</a>
-    <a href="/national">জাতীয়</a>
-    <a href="/%E0%A6%B8%E0%A6%BE%E0%A6%B0%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6">সারাদেশ</a>
-    <a href="https://example.com/category/international/">International</a>
-    <a href="/national">জাতীয়</a>
-    <a href="/videos">ভিডিও</a>
-    <a href="/tag/crime">Crime</a>
-    <a href="https://epaper.example.com/today">ই-পেপার</a>
-    <a href="https://other.com/sports">Sports</a>
-    <a href="/national/news/123456">সীমান্তে বিএসএফের গুলিতে যুবক নিহত</a>
-    <a href="/converter">Converter</a>
-    <a href="/cdn-cgi/l/email-protection">Email</a>
-    </nav></header>
+    html = """<html><body><header><nav class="main-menu"><ul>
+    <li><a href="/">প্রচ্ছদ</a></li>
+    <li><a href="/national">জাতীয়</a>
+      <ul class="dropdown-menu"><li><a href="/national">জাতীয়</a></li><li><a href="/national/capital">রাজধানী</a></li></ul></li>
+    <li><a href="/%E0%A6%B8%E0%A6%BE%E0%A6%B0%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6">সারাদেশ</a></li>
+    <li><a href="https://example.com/category/international/">International</a></li>
+    <li><a href="/videos">ভিডিও</a></li><li><a href="/tag/crime">Crime</a></li><li><a href="/converter">Converter</a></li>
+    <li><a href="https://epaper.example.com/today">ই-পেপার</a></li><li><a href="https://other.com/sports">Sports</a></li>
+    <li><a href="/national/news/123456">সীমান্তে বিএসএফের গুলিতে যুবক নিহত</a></li>
+    <li><a href="#">আরও</a><ul class="sub-menu"><li><a href="/law">আইন-আদালত</a></li></ul></li>
+    </ul></nav></header>
+    <div class="mobile-menu"><ul><li><a href="/national/capital">রাজধানী</a></li></ul></div>
+    <div class="mega-menu"><ul><li><a href="/economy-all">অর্থনীতি</a></li></ul></div>
     <div class="lead"><a href="/economy">Economy</a></div>
-    <footer><a href="/about-us">About us</a><a href="/law-and-court">Law & court</a></footer></body></html>"""
+    <footer><nav><a href="/about-us">About us</a><a href="/sports">Sports</a></nav></footer></body></html>"""
     links = find_section_links(html, "https://www.example.com/", "https://www.example.com/", limit=40)
+    # sub-tab /national/capital is left out even though the flat mobile menu repeats it;
+    # /law, only under a "More" button (not a tab, like a full-site mega menu), counts neither way
     assert links == ["https://www.example.com/national",
                      "https://www.example.com/%E0%A6%B8%E0%A6%BE%E0%A6%B0%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6",
-                     "https://www.example.com/law-and-court",  # top-level tabs before sub-tabs
                      "https://example.com/category/international/"]
     assert len(find_section_links(html, "https://www.example.com/", "https://www.example.com/", limit=2)) == 2
+
+
+def test_find_print_links():
+    from avn_scraper.discover.sections import find_print_links
+
+    html = """<html><body><a href="/printversion">প্রিন্ট সংস্করণ</a>
+    <a href="/topic/%E0%A6%9B%E0%A6%BE%E0%A6%AA%E0%A6%BE-%E0%A6%B8%E0%A6%82%E0%A6%B8%E0%A7%8D%E0%A6%95%E0%A6%B0%E0%A6%A3">ছাপা সংস্করণ</a>
+    <a href="/epaper/2026-10-21/">ই-পেপার</a>
+    <a href="https://epaper.example.com/">ই-পেপার</a>
+    <a href="/about-us">আজকের পত্রিকা</a>
+    <a href="/printversion/details/987654">A print article headline</a></body></html>"""
+    assert find_print_links(html, "https://example.com/", "https://example.com/") == [
+        "https://example.com/printversion",
+        "https://example.com/topic/%E0%A6%9B%E0%A6%BE%E0%A6%AA%E0%A6%BE-%E0%A6%B8%E0%A6%82%E0%A6%B8%E0%A7%8D%E0%A6%95%E0%A6%B0%E0%A6%A3",
+        "https://example.com/epaper/2026-10-21/"]
+
+
+def test_page_is_past_window():
+    from avn_scraper.discover.sections import page_is_past_window
+
+    cutoff = datetime(2026, 10, 20, 1, tzinfo=timezone.utc)
+    old = '<time datetime="2026-10-19T08:00:00+06:00"></time>'
+    new = '<time datetime="2026-10-20T08:00:00+06:00"></time>'
+    assert page_is_past_window(f"<html><body>{old}{old}{new}</body></html>", cutoff)
+    assert not page_is_past_window(f"<html><body>{old}{new}{new}</body></html>", cutoff)
+    # no <time>: dates in the article URLs (day precision)
+    urls = ["https://x.com/2026/10/18/a", "https://x.com/2026/10/18/b", "https://x.com/news/1"]
+    assert page_is_past_window("<html></html>", cutoff, urls)
+    assert not page_is_past_window("<html></html>", cutoff, ["https://x.com/2026/10/20/a"])
+    assert not page_is_past_window("<html></html>", cutoff, ["https://x.com/news/1"])
 
 
 def test_find_next_page():

@@ -1,9 +1,9 @@
-"""Section tabs (national, international, সারাদেশ, ...) found in the site menu, with pagination."""
+"""Section tabs (national, international, latest, ...) and the print edition, with pagination."""
 
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
@@ -20,70 +20,119 @@ if TYPE_CHECKING:
     from .sources import ListingMemory
 
 _MENU_ATTR = re.compile(r"menu|nav", re.I)
+_SUBMENU_ATTR = re.compile(r"sub-?menu|sub-?nav|dropdown|mega|children", re.I)
+_DROPDOWN = "ul, ol, [class*=dropdown-menu], [class*=sub-menu], [class*=submenu], [class*=mega]"
 _NOT_SECTION = re.compile(
     r"/(login|signin|register|signup|search|videos?|photos?|gallery|galleries|e-?paper|archives?|about|contact"
-    r"|privacy|terms|advertis\w*|subscri\w*|rss|feeds?|sitemap|authors?|podcasts?|tags?|careers?|jobs?|page"
-    r"|cdn-cgi|converter|live|(opinion-)?polls?|horoscope|quiz)"
+    r"|privacy|terms|advertis\w*|subscri\w*|rss|feeds?|sitemap|authors?|podcasts?|tags?|topics?|careers?|jobs?|page"
+    r"|cdn-cgi|[\w-]*converter|live|(opinion-)?polls?|horoscope|quiz|comment-policy|[\w-]*rate-card|apps?|user"
+    r"|home|press-release|photo\w*|media\w*|tube|magazine-archive)"
     r"(?=[/_.-]|$)", re.I)
+# The print edition / e-paper as an HTML list of articles on the outlet's own site.
+_PRINT_PATH = re.compile(r"print|e-?paper|todays?-?paper|ajker-?patrika|ছাপা", re.I)
+_PRINT_TEXT = re.compile(r"আজকের পত্রিকা|ছাপা সংস্করণ|প্রিন্ট সংস্করণ|প্রিন্ট ভার্সন|print edition|print version|today'?s paper", re.I)
 _FILE_EXT = re.compile(r"\.(pdf|jpe?g|png|gif|webp|xml|zip|mp4|apk)$", re.I)
 _ARTICLE_ID = re.compile(r"\d{5,}")
+_URL_DATE = re.compile(r"/(20\d\d)[/-](\d\d)[/-](\d\d)(?=[/-]|$)")
 _MAX_DEPTH = 3
 _MAX_SLUG_CHARS = 40
 _MAX_TEXT_CHARS = 30
 _MAX_TEXT_WORDS = 4
+_MAX_PRINT_LINKS = 3
 
 _PAGE_KEYS = ("page", "pg", "p", "paged", "pageno", "page_no")
 _PATH_PAGE = re.compile(r"/page/(\d+)$")
 
 
-def _in_menu(node) -> bool:
+def _menu_level(node, page_url: str, homepage: str) -> str | None:
+    """Where a link sits in the site menu: "parent" (a top-level item that opens a dropdown),
+    "top", "sub" (in a dropdown under another tab), or None (not in a menu, or in a dropdown
+    such as "More" / a hamburger list whose button is not itself a tab)."""
+    in_menu, sub, items = False, False, []
     node = node.parent
     while node is not None:
-        if node.tag in ("nav", "header", "footer"):
-            return True
+        if node.tag == "footer":
+            return None
         attrs = node.attributes
-        if attrs.get("role") == "navigation" or _MENU_ATTR.search(f"{attrs.get('class') or ''} {attrs.get('id') or ''}"):
-            return True
+        names = f"{attrs.get('class') or ''} {attrs.get('id') or ''}"
+        if node.tag == "li":
+            items.append(node)
+        elif _SUBMENU_ATTR.search(names):
+            sub = True
+        if node.tag in ("nav", "header") or attrs.get("role") == "navigation" or _MENU_ATTR.search(names):
+            in_menu = True
         node = node.parent
-    return False
+    if not in_menu:
+        return None
+    if sub or len(items) > 1:
+        owner = items[1] if len(items) > 1 else None  # the menu item the dropdown opens from
+        button = owner.css_first("a[href]") if owner is not None else None
+        href = (button.attributes.get("href") or "").strip() if button is not None else ""
+        tab = href and not href.startswith(("#", "javascript:")) and _section_path(urljoin(page_url, href), homepage)
+        return "sub" if tab else None
+    return "parent" if items and items[0].css_first(_DROPDOWN) is not None else "top"
 
 
-def _looks_like_section(url: str, text: str, homepage: str) -> bool:
+def _section_path(url: str, homepage: str) -> str | None:
+    """Unquoted path of a same-host, non-article URL at most _MAX_DEPTH deep, else None."""
     if not url.startswith("http") or host_of(url) != host_of(homepage):
-        return False
+        return None
     path = unquote(urlsplit(url).path).rstrip("/")
     segments = [s for s in path.split("/") if s]
     if not segments or len(segments) > _MAX_DEPTH:
-        return False
+        return None
     last = segments[-1]
-    if len(last) > _MAX_SLUG_CHARS or _ARTICLE_ID.search(last):
-        return False
-    if _NOT_SECTION.search(path.lower()) or _FILE_EXT.search(path):
-        return False
-    return 2 <= len(text) <= _MAX_TEXT_CHARS and len(text.split()) <= _MAX_TEXT_WORDS
+    if len(last) > _MAX_SLUG_CHARS or _ARTICLE_ID.search(last) or _FILE_EXT.search(last):
+        return None
+    return path
+
+
+def _links(html: str, page_url: str):
+    for a in HTMLParser(html).css("a[href]"):
+        href = (a.attributes.get("href") or "").strip()
+        if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            yield a, urljoin(page_url, href).split("#")[0], " ".join(a.text(separator=" ").split())
 
 
 def find_section_links(html: str, page_url: str, homepage: str, limit: int) -> list[str]:
-    """Links in the page's menus (nav/header/footer) that look like section tabs.
+    """Top-level tabs of the site's main menu (national, international, latest, ...), in menu order.
 
-    Top-level tabs come first (in menu order), then sub-tabs, so `limit` drops sub-tabs first.
+    A link that also sits in a dropdown anywhere (sites often repeat menus flat for mobile)
+    counts as a sub-tab and is left out, unless it is the item that opens a dropdown.
     """
-    tree = HTMLParser(html)
+    top: dict[str, str] = {}
+    parents: set[str] = set()
+    sub = {canonicalize(homepage)}
+    for a, url, text in _links(html, page_url):
+        path = _section_path(url, homepage)
+        if (path is None or _NOT_SECTION.search(path.lower()) or not 2 <= len(text) <= _MAX_TEXT_CHARS
+                or len(text.split()) > _MAX_TEXT_WORDS):
+            continue
+        level = _menu_level(a, page_url, homepage)
+        if level == "sub":
+            sub.add(canonicalize(url))
+        elif level is not None:
+            top.setdefault(canonicalize(url), url)
+            if level == "parent":
+                parents.add(canonicalize(url))
+    return [url for key, url in top.items() if key in parents or key not in sub][:limit]
+
+
+def find_print_links(html: str, page_url: str, homepage: str) -> list[str]:
+    """Links (anywhere on the page) to the print edition / e-paper listed on the outlet's own site."""
     seen = {canonicalize(homepage)}
     out = []
-    for a in tree.css("a[href]"):
-        href = (a.attributes.get("href") or "").strip()
-        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+    for _, url, text in _links(html, page_url):
+        path = _section_path(url, homepage)
+        if path is None or not (_PRINT_PATH.search(path) or _PRINT_TEXT.search(text)):
             continue
-        url = urljoin(page_url, href).split("#")[0]
-        text = " ".join(a.text(separator=" ").split())
-        if not _looks_like_section(url, text, homepage) or not _in_menu(a):
-            continue
+        if _NOT_SECTION.search(path.lower()) and not _PRINT_PATH.search(path):
+            continue  # e.g. Ajker Patrika's "about us", named after the paper (আজকের পত্রিকা)
         key = canonicalize(url)
         if key not in seen:
             seen.add(key)
             out.append(url)
-    return sorted(out, key=lambda u: len([s for s in urlsplit(u).path.split("/") if s]))[:limit]
+    return out[:_MAX_PRINT_LINKS]
 
 
 def _page_key(url: str) -> tuple[str, frozenset]:
@@ -126,25 +175,43 @@ def find_next_page(html: str, page_url: str) -> str | None:
     return next((links[k] for k in _next_page_keys(page_url) if k in links), None)
 
 
-def page_is_past_window(html: str, cutoff: datetime) -> bool:
-    """True when most dated items (<time datetime>) on the page are older than cutoff."""
+def _url_day_end(url: str) -> datetime | None:
+    """End of the day in an article URL like /2026/10/21/... (day precision, so err late)."""
+    m = _URL_DATE.search(url)
+    if not m:
+        return None
+    try:
+        return datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=timezone.utc) + timedelta(days=1)
+    except ValueError:
+        return None
+
+
+def page_is_past_window(html: str, cutoff: datetime, urls: list[str] = ()) -> bool:
+    """True when most dated items on the page are older than cutoff.
+
+    Dates come from <time datetime> elements, else from dates in the article URLs.
+    """
     dates = [d for node in HTMLParser(html).css("time[datetime]") if (d := parse_dt(node.attributes.get("datetime")))]
+    if not dates:
+        dates = [d for u in urls if (d := _url_day_end(u))]
     return bool(dates) and sum(d < cutoff for d in dates) * 2 > len(dates)
 
 
 async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str, cutoff: datetime,
                             settings: dict | None, memory: ListingMemory | None
                             ) -> tuple[list[Candidate], list[str], int]:
-    """Scan every section tab and follow its pages. Returns (candidates, sections, pages scanned).
+    """Scan the print edition and every top-level tab, following each one's pages.
 
-    Paging stops at max_pages, when a page brings nothing new, when at least half its links
-    were already seen on an earlier run, or when its dated items are older than cutoff.
+    Returns (candidates, sections, pages scanned). Paging stops when most of a page's dated
+    items are older than cutoff, when at least half its links were seen on an earlier run
+    (the previous daily run), when a page brings nothing new, or at max_pages (a safety cap).
     """
     settings = settings or {}
     limit = int(settings.get("max_per_source", 60))
-    max_pages = int(settings.get("max_pages", 5))
+    max_pages = int(settings.get("max_pages", 20))
     candidates = list(source.sections)
     if settings.get("auto_discover", True) and source.auto_sections and homepage_html:
+        candidates += find_print_links(homepage_html, source.homepage, source.homepage)
         candidates += find_section_links(homepage_html, source.homepage, source.homepage, limit)
     sections, keys = [], set()
     for u in candidates:
@@ -172,7 +239,7 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
             old = memory.seen_before(source.id, ids) if memory is not None else 0
             if memory is not None:
                 memory.record(source.id, ids)
-            if old * 2 >= len(ids) or page_is_past_window(html, cutoff):
+            if old * 2 >= len(ids) or page_is_past_window(html, cutoff, [c.url for c in items]):
                 break
             url = find_next_page(html, url)
     return out, sections, pages

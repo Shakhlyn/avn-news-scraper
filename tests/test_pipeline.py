@@ -52,7 +52,7 @@ def make_site(requests: Counter):
 
 def make_config(tmp_path, keywords) -> Config:
     settings = {
-        "timezone": "Asia/Dhaka", "data_dir": str(tmp_path), "window_hours": 30,
+        "timezone": "Asia/Dhaka", "data_dir": str(tmp_path), "window_hours": 24,
         "http": {"per_host_delay": 0, "retries": 0, "respect_robots": True},
         "max_articles_per_source": 80,
     }

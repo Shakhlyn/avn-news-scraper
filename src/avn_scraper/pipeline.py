@@ -120,7 +120,7 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
     tz = ZoneInfo(cfg.timezone)
     started = datetime.now(timezone.utc)
     run_id = started.strftime("%Y%m%dT%H%M%SZ")
-    cutoff = started - timedelta(hours=opts.since_hours or float(s.get("window_hours", 30)))
+    cutoff = started - timedelta(hours=opts.since_hours or float(s.get("window_hours", 24)))
     classifier = Classifier(cfg.keywords)
     storage = LocalStorage(cfg.data_dir)
     storage.upsert_sources(cfg.sources)
