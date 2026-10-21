@@ -19,6 +19,16 @@ http:
 # Upper bound on full-article downloads per outlet per run (after keyword pre-filter).
 max_articles_per_source: 80
 
+# Section tabs (national, international, সারাদেশ, ...). The homepage menu is read on
+# every run and each tab is scanned for headline links, together with any `sections:`
+# listed in sources.yaml. "Next page" links are followed until a page is mostly
+# articles already seen on an earlier run, its dated items are older than
+# window_hours, or max_pages is reached.
+sections:
+  auto_discover: true
+  max_per_source: 60   # tabs scanned per outlet (top-level tabs first, then sub-tabs)
+  max_pages: 5         # pages followed per tab
+
 # Keep the auto-discovered feed/sitemap URLs this many days before re-discovering.
 endpoint_cache_days: 7
 

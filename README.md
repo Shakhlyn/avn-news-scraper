@@ -42,7 +42,7 @@ Use `.venv/bin/avn`, or activate the venv first.
 
 ## How it works
 
-1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, RSS feeds and news sitemaps. Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
+1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, every section tab, RSS feeds and news sitemaps. Section tabs (national, international, সারাদেশ, ...) are taken from the homepage menu on each run. Each tab's "next page" links are followed until it reaches articles an earlier run already saw, articles older than the window, or `sections.max_pages` (`settings.yaml`). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
 3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).
@@ -70,6 +70,7 @@ data/
     master.xlsx                          Summary per month, All, one sheet per topic
   logs/runs/YYYY-MM-DD_HHMMSS.json       per-run stats (sources ok/failed, counts, failed downloads)
   cache/endpoints.json                   auto-discovered feeds/sitemaps
+  cache/listing_seen.json                links seen on section pages (where paging stops)
 ```
 
 Folders are organized by publication date (Dhaka time). An article is stored once. Category views come from the database and exports, since one article can belong to several categories.
@@ -166,7 +167,7 @@ config/            settings.yaml, sources.yaml, keywords.yaml
 src/avn_scraper/
   cli.py           commands
   pipeline.py      the daily run + reclassify
-  discover/        rss, sitemap, listing (homepage links), catchall, per-source orchestration
+  discover/        rss, sitemap, listing (homepage links), sections (menu tabs + paging), catchall, per-source orchestration
   fetch.py         polite async HTTP client
   extract.py       article text/metadata
   classify.py      keyword scoring

@@ -1,9 +1,10 @@
-"""Per-outlet discovery: listing pages + configured or auto-discovered feeds/sitemaps."""
+"""Per-outlet discovery: homepage + section tabs + configured or auto-discovered feeds/sitemaps."""
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from ..urls import same_site
 from . import Candidate
 from .listing import discover_listing, find_feed_links
 from .rss import discover_feed
+from .sections import discover_sections
 from .sitemap import discover_sitemap
 
 log = logging.getLogger(__name__)
@@ -66,6 +68,36 @@ class EndpointCache:
         self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+class ListingMemory:
+    """Article ids seen on section pages per source, so paging stops where the last run reached."""
+
+    def __init__(self, path: Path, keep_days: int = 4):
+        self.path = path
+        self.keep = timedelta(days=keep_days)
+        self.started = round(time.time(), 3)
+        try:
+            self.data: dict[str, dict[str, float]] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.data = {}
+
+    def seen_before(self, source_id: str, ids: set[str]) -> int:
+        """How many of ids were first seen by an earlier run."""
+        seen = self.data.get(source_id, {})
+        return sum(1 for i in ids if i in seen and seen[i] < self.started)
+
+    def record(self, source_id: str, ids: set[str]) -> None:
+        entries = self.data.setdefault(source_id, {})
+        for i in ids:
+            entries.setdefault(i, self.started)
+
+    def save(self) -> None:
+        oldest = time.time() - self.keep.total_seconds()
+        self.data = {sid: kept for sid, entries in self.data.items()
+                     if (kept := {i: t for i, t in entries.items() if t >= oldest})}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.data, separators=(",", ":")), encoding="utf-8")
+
+
 def _rank_sitemaps(urls: list[str]) -> list[str]:
     def score(u: str) -> int:
         lower = u.lower()
@@ -73,16 +105,17 @@ def _rank_sitemaps(urls: list[str]) -> list[str]:
     return [u for u in sorted(urls, key=score, reverse=True) if score(u) >= 0][:2]
 
 
-async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime,
-                          cache: EndpointCache) -> SourceResult:
+async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, cache: EndpointCache,
+                          sections_settings: dict | None = None,
+                          memory: ListingMemory | None = None) -> SourceResult:
     result = SourceResult(source.id)
     try:
-        homepage_html = ""
-        for page in [source.homepage, *source.sections]:
-            items, html = await discover_listing(fetcher, page, source.homepage, source.id)
-            if page == source.homepage:
-                homepage_html = html
-            result.add("listing", items)
+        items, homepage_html = await discover_listing(fetcher, source.homepage, source.homepage, source.id)
+        result.add("listing", items)
+        items, sections, pages = await discover_sections(fetcher, source, homepage_html, cutoff,
+                                                         sections_settings, memory)
+        result.add("section", items)
+        result.counts["section_pages"] = pages
 
         feeds, sitemaps = list(source.feeds), list(source.sitemaps)
         if not feeds and not sitemaps:
@@ -97,7 +130,7 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime,
                 sitemaps = _rank_sitemaps([u for u in robots if same_site(u, source.homepage)])
                 if homepage_html:  # only cache when the site actually answered
                     cache.set(source.id, feeds, sitemaps)
-        result.endpoints = {"feeds": feeds, "sitemaps": sitemaps}
+        result.endpoints = {"feeds": feeds, "sitemaps": sitemaps, "sections": sections}
 
         for url in feeds:
             result.add("rss", await discover_feed(fetcher, url, source.id))

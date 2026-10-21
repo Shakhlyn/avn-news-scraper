@@ -19,7 +19,7 @@ from .config import Config, Source
 from .dedupe import find_cluster
 from .discover import Candidate
 from .discover.catchall import discover_catchall
-from .discover.sources import EndpointCache, discover_source
+from .discover.sources import EndpointCache, ListingMemory, discover_source
 from .export import export_all
 from .extract import Extracted, extract
 from .fetch import Fetcher
@@ -133,10 +133,12 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
     catchall_cfg = s.get("search_catchall") or {}
     use_catchall = catchall_cfg.get("enabled", False) if opts.catchall is None else opts.catchall
     cache = EndpointCache(cfg.data_dir / "cache" / "endpoints.json", int(s.get("endpoint_cache_days", 7)))
+    memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")
 
     async with Fetcher(s.get("http") or {}, transport=transport) as fetcher:
         # 1. discover
-        results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache) for src in sources))
+        results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)
+                                         for src in sources))
         cache.save()
         stats["sources"] = {r.source_id: {"ok": r.ok, "counts": r.counts, "endpoints": r.endpoints, "error": r.error}
                             for r in results}
@@ -266,6 +268,8 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
 
     if not opts.dry_run:
         storage.mark_seen(seen_rows)
+        # Saved only once the articles are stored: the next run's paging stops at these links.
+        memory.save()
     stats["outcome"] = dict(outcome)
     stats["fetch_failed"] = failed[:100]
     stats["by_category"] = dict(by_category)

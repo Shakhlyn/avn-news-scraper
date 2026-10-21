@@ -34,6 +34,7 @@ class Source:
     feeds: list[str] = field(default_factory=list)
     sitemaps: list[str] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
+    auto_sections: bool = True
     enabled: bool = True
 
 

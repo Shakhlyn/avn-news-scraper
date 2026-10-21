@@ -8,6 +8,8 @@
 #   feeds:     RSS/Atom URLs (optional)
 #   sitemaps:  sitemap / news-sitemap URLs (optional)
 #   sections:  extra listing pages to scan for headline links (e.g. crime, law, national)
+#   auto_sections: set false to scan only the listed `sections`, not the tabs found
+#              in the homepage menu (see settings.yaml -> sections)
 #   enabled:   set false to skip
 #
 # If feeds and sitemaps are both empty, they are auto-discovered from the homepage

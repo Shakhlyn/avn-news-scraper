@@ -16,7 +16,7 @@ from rich.table import Table
 
 from .classify import Classifier
 from .config import load_config
-from .discover.sources import EndpointCache, discover_source
+from .discover.sources import EndpointCache, ListingMemory, discover_source
 from .export import export_all
 from .fetch import Fetcher
 from .lock import RunInProgress, run_lock
@@ -105,21 +105,27 @@ def check_sources(
         for s in selected:
             cache.clear(s.id)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(cfg.settings.get("window_hours", 30)))
+    memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")  # read only: never saved here
 
     async def go():
         async with Fetcher(cfg.settings.get("http") or {}) as fetcher:
-            return await asyncio.gather(*(discover_source(fetcher, s, cutoff, cache) for s in selected))
+            return await asyncio.gather(*(discover_source(fetcher, s, cutoff, cache, cfg.settings.get("sections"), memory)
+                                          for s in selected))
 
     results = asyncio.run(go())
     cache.save()
-    table = Table("source", "listing", "rss", "sitemap", "feeds / sitemaps used", "status")
+    table = Table("source", "listing", "tabs", "section", "rss", "sitemap", "feeds / sitemaps used", "status")
     for r in sorted(results, key=lambda r: (r.ok, r.source_id)):
         eps = r.endpoints or {}
         used = "\n".join((eps.get("feeds") or []) + (eps.get("sitemaps") or [])) or "-"
         status = "[green]ok[/]" if r.ok else f"[red]{r.error or 'nothing found'}[/]"
-        table.add_row(r.source_id, str(r.counts.get("listing", 0)), str(r.counts.get("rss", 0)),
-                      str(r.counts.get("sitemap", 0)), used, status)
+        tabs = f"{len(eps.get('sections') or [])} / {r.counts.get('section_pages', 0)} pages"
+        table.add_row(r.source_id, str(r.counts.get("listing", 0)), tabs, str(r.counts.get("section", 0)),
+                      str(r.counts.get("rss", 0)), str(r.counts.get("sitemap", 0)), used, status)
     console.print(table)
+    if verbose:
+        for r in sorted(results, key=lambda r: r.source_id):
+            console.print(f"[bold]{r.source_id}[/] tabs: {' '.join((r.endpoints or {}).get('sections') or []) or '-'}")
     console.print(f"{sum(r.ok for r in results)}/{len(results)} sources returned items")
 
 

@@ -123,3 +123,46 @@ def test_extract_prefers_longer_json_ld_body():
     </script></head><body><article><h1>শিরোনাম</h1><p>সংক্ষিপ্ত অংশ মাত্র।</p></article></body></html>"""
     ex = extract(html, "https://example.com/n/2")
     assert len(ex.body) >= len(long_text.strip()) - 5
+
+
+def test_find_section_links():
+    from avn_scraper.discover.sections import find_section_links
+
+    html = """<html><body><header><nav class="main-menu">
+    <a href="/">প্রচ্ছদ</a>
+    <a href="/national">জাতীয়</a>
+    <a href="/%E0%A6%B8%E0%A6%BE%E0%A6%B0%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6">সারাদেশ</a>
+    <a href="https://example.com/category/international/">International</a>
+    <a href="/national">জাতীয়</a>
+    <a href="/videos">ভিডিও</a>
+    <a href="/tag/crime">Crime</a>
+    <a href="https://epaper.example.com/today">ই-পেপার</a>
+    <a href="https://other.com/sports">Sports</a>
+    <a href="/national/news/123456">সীমান্তে বিএসএফের গুলিতে যুবক নিহত</a>
+    <a href="/converter">Converter</a>
+    <a href="/cdn-cgi/l/email-protection">Email</a>
+    </nav></header>
+    <div class="lead"><a href="/economy">Economy</a></div>
+    <footer><a href="/about-us">About us</a><a href="/law-and-court">Law & court</a></footer></body></html>"""
+    links = find_section_links(html, "https://www.example.com/", "https://www.example.com/", limit=40)
+    assert links == ["https://www.example.com/national",
+                     "https://www.example.com/%E0%A6%B8%E0%A6%BE%E0%A6%B0%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6",
+                     "https://www.example.com/law-and-court",  # top-level tabs before sub-tabs
+                     "https://example.com/category/international/"]
+    assert len(find_section_links(html, "https://www.example.com/", "https://www.example.com/", limit=2)) == 2
+
+
+def test_find_next_page():
+    from avn_scraper.discover.sections import find_next_page
+
+    def page(*hrefs, head=""):
+        return f"<html><head>{head}</head><body>" + "".join(f'<a href="{h}">{i}</a>' for i, h in enumerate(hrefs)) + "</body></html>"
+
+    base = "https://example.com/national"
+    assert find_next_page(page(head='<link rel="next" href="/national?page=2">'), base) == base + "?page=2"
+    assert find_next_page(page("/national?page=1", "/national?page=2", "/national?page=3"), base) == base + "?page=2"
+    assert find_next_page(page("/national?page=1"), base) == base + "?page=1"  # 0-based (Drupal)
+    assert find_next_page(page("/national?page=2", "/national?page=4"), base + "?page=3") == base + "?page=4"
+    assert find_next_page(page("/national/page/2/"), base + "/") == base + "/page/2/"
+    assert find_next_page(page("/national/page/2/", "/national/page/3/"), base + "/page/2/") == base + "/page/3/"
+    assert find_next_page(page("/sports?page=2", "/national/1234"), base) is None

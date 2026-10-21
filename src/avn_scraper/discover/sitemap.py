@@ -27,7 +27,7 @@ def _gunzip(content: bytes) -> bytes:
     return out
 
 
-def _parse_dt(value: str | None) -> datetime | None:
+def parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     value = value.strip().replace("Z", "+00:00")
@@ -53,7 +53,7 @@ def parse_sitemap(content: bytes) -> tuple[list[tuple[str, datetime | None]], li
     root = etree.fromstring(content, parser=_PARSER)
     if root is None:
         return [], []
-    children = [(_text(sm, "{*}loc"), _parse_dt(_text(sm, "{*}lastmod")))
+    children = [(_text(sm, "{*}loc"), parse_dt(_text(sm, "{*}lastmod")))
                 for sm in root.iterfind("{*}sitemap")]
     urls = []
     for u in root.iterfind("{*}url"):
@@ -63,7 +63,7 @@ def parse_sitemap(content: bytes) -> tuple[list[tuple[str, datetime | None]], li
         urls.append({
             "loc": loc,
             "title": _text(u, "{*}news/{*}title") or "",
-            "published_at": _parse_dt(_text(u, "{*}news/{*}publication_date") or _text(u, "{*}lastmod")),
+            "published_at": parse_dt(_text(u, "{*}news/{*}publication_date") or _text(u, "{*}lastmod")),
         })
     return [c for c in children if c[0]], urls
 

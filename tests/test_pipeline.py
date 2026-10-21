@@ -94,3 +94,45 @@ def test_end_to_end_run(tmp_path, cfg):
     second = asyncio.run(run_pipeline(config, RunOptions(), transport=make_site(requests)))
     assert requests["/news/1"] == 0 and requests["/news/2"] == 0 and requests["/news/3"] == 1
     assert second.stats["outcome"].get("saved", 0) == 0
+
+
+TAB_HOME = """<html><body><nav><a href="/">Home</a><a href="/national">জাতীয়</a></nav>
+<a href="/news/9">Stock market gains for the third straight day</a></body></html>"""
+TAB_PAGE_1 = """<html><body><nav><a href="/national">জাতীয়</a></nav>
+<a href="/news/5">সীমান্তে বিএসএফের গুলিতে যুবক নিহত</a>
+<a href="/news/7">Stock market falls for the second straight day</a>
+<a href="/national?page=2">2</a></body></html>"""
+TAB_PAGE_2 = """<html><body><a href="/news/6">Youth shot dead by BSF at Lalmonirhat border</a>
+<a href="/national?page=3">3</a></body></html>"""
+
+
+def make_tab_site(requests: Counter):
+    pages = {"/": TAB_HOME, "/national": TAB_PAGE_1, "/national?page=2": TAB_PAGE_2,
+             "/national?page=3": TAB_PAGE_2, "/news/5": ARTICLE_1, "/news/6": ARTICLE_1.replace("লালমনিরহাটের", "সাতক্ষীরার")}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = request.url.raw_path.decode()
+        requests[key] += 1
+        html = pages.get(key)
+        if html is None:
+            return httpx.Response(404, stream=_Stream(b"no"))
+        return httpx.Response(200, stream=_Stream(html.encode()), headers={"Content-Type": "text/html; charset=utf-8"})
+    return httpx.MockTransport(handler)
+
+
+def test_section_tabs_and_pagination(tmp_path, cfg):
+    config = make_config(tmp_path, cfg.keywords)
+    requests: Counter = Counter()
+
+    result = asyncio.run(run_pipeline(config, RunOptions(), transport=make_tab_site(requests)))
+    counts = result.stats["sources"]["fake"]["counts"]
+    assert result.stats["sources"]["fake"]["endpoints"]["sections"] == [SITE + "/national"]
+    # page 3 repeats page 2's links, so paging stops there
+    assert counts["section_pages"] == 3 and requests["/national?page=3"] == 1
+    assert {r["url"] for r in result.saved} == {SITE + "/news/5", SITE + "/news/6"}
+
+    # next run: page 1 holds only links seen last time, so page 2 isn't requested
+    requests.clear()
+    second = asyncio.run(run_pipeline(config, RunOptions(), transport=make_tab_site(requests)))
+    assert requests["/national"] == 1 and requests["/national?page=2"] == 0
+    assert second.stats["sources"]["fake"]["counts"]["section_pages"] == 1
