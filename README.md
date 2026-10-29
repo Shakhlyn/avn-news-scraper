@@ -36,6 +36,8 @@ avn check-sources --refresh  # re-discover feeds/sitemaps
 avn reclassify               # re-apply keywords.yaml to stored articles (no network)
 avn export                   # rebuild CSV / Excel from the database
 avn stats                    # counts per category and per outlet
+avn publish                  # upload the last 24 hours to R2 for avnbd.org/dashboard
+avn publish --out news.json  # write that file here instead (no upload)
 ```
 
 Use `.venv/bin/avn`, or activate the venv first.
@@ -160,12 +162,46 @@ docker run --rm -v "$PWD/data:/app/data" avn-news-scraper run
 
 Set `AVN_HOME` to point the tool at a different project folder (`config/` + `data/`).
 
+## Publishing to the website
+
+`avn publish` builds the file behind the AVN site's news watch page (`/dashboard`):
+every article stored in the last 24 hours (`publish.hours` in `settings.yaml`), with
+reports of one story grouped by `story_cluster_id`, and without article bodies or
+images. Articles marked as false positives in the `review` table (`verified = 0`)
+are left out. It uploads the file to Cloudflare R2 as `staging/news.json`.
+
+The team reviews that file on staging.avnbd.org/dashboard and accepts the stories that
+belong in the record; avnbd.org shows only the accepted ones (stored in the site's D1
+database, see the avn repo's CLAUDE.md). The site reads the file from R2 when the page
+opens, so nothing is committed or rebuilt. The bucket and its API token come
+from the environment, never from this repo:
+
+```bash
+export R2_ACCOUNT_ID=...          # Cloudflare account id
+export R2_ACCESS_KEY_ID=...       # R2 API token with write access to the bucket
+export R2_SECRET_ACCESS_KEY=...
+export R2_BUCKET=...              # the bucket bound to the staging Pages project as NEWS
+```
+
+On the server, run it straight after the daily scrape, for example in the systemd
+service (with the four variables in an `EnvironmentFile`):
+
+```ini
+EnvironmentFile=%h/.config/avn-scraper/r2.env
+ExecStart=%h/avn_news_scraper/.venv/bin/avn run
+ExecStart=%h/avn_news_scraper/.venv/bin/avn publish
+```
+
+`avn publish --out news.json` writes the file locally without uploading, for
+checking the page on your own machine (see the avn repo's CLAUDE.md).
+
 ## Project layout
 
 ```
 config/            settings.yaml, sources.yaml, keywords.yaml
 src/avn_scraper/
   cli.py           commands
+  publish.py       the news watch file for avnbd.org/dashboard, upload to R2
   pipeline.py      the daily run + reclassify
   discover/        rss, sitemap, listing (homepage links), sections (menu tabs + paging), catchall, per-source orchestration
   fetch.py         polite async HTTP client

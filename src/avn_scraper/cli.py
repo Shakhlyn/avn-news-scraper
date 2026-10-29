@@ -1,9 +1,10 @@
-"""Command line: `avn run`, `avn check-sources`, `avn export`, `avn reclassify`, `avn stats`."""
+"""Command line: `avn run`, `avn check-sources`, `avn export`, `avn reclassify`, `avn publish`, `avn stats`."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from .export import export_all
 from .fetch import Fetcher
 from .lock import RunInProgress, run_lock
 from .pipeline import RunOptions, reclassify, run_pipeline
+from .publish import build_news, to_json, upload_r2
 from .storage import LocalStorage
 
 app = typer.Typer(add_completion=False, help="Bangladesh human-rights news scraper.")
@@ -155,6 +157,35 @@ def reclassify_cmd(config: Optional[Path] = ConfigOpt) -> None:
         raise typer.Exit(1)
     console.print(dict(counts))
     export(day=None, config=config)
+
+
+@app.command()
+def publish(
+    hours: Optional[float] = typer.Option(None, help="Articles stored in this many hours (default: settings publish.hours)"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write the JSON to this file instead of uploading to R2"),
+    config: Optional[Path] = ConfigOpt,
+) -> None:
+    """Build the news watch file for the staging review desk and upload it to R2."""
+    cfg = load_config(config)
+    pub = cfg.settings.get("publish") or {}
+    storage = LocalStorage(cfg.data_dir)
+    payload = build_news(storage, list((cfg.keywords.get("categories") or {}).keys()),
+                         hours=hours or float(pub.get("hours", 24)))
+    storage.close()
+    body = to_json(payload)
+    n_reports = sum(len(s["reports"]) for s in payload["stories"])
+    summary = f"{len(payload['stories'])} stories, {n_reports} reports since {payload['from']}"
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(body)
+        console.print(f"{summary} -> {out}")
+        return
+    try:
+        key = upload_r2(body)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(f"{summary} -> r2://{os.environ['R2_BUCKET']}/{key}")
 
 
 @app.command()
