@@ -1,5 +1,3 @@
-"""The SQL behind the API. Every value goes in as a parameter."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,9 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
-from psycopg.types.json import Jsonb
 
-from .stories import build_stories, to_report
+from ..services.stories import build_stories, to_report
 
 LISTED = ("COALESCE(r.verified, 1) <> 0 AND EXISTS "
           "(SELECT 1 FROM article_categories c WHERE c.article_id = a.id)")
@@ -126,25 +123,3 @@ def find_story(conn: psycopg.Connection, story_id: str, order: list[str]) -> dic
     """Every report of a story, whichever day it came in."""
     reports, cluster_of = _reports(conn, f"{LISTED} AND {STORY} = %(id)s", {"id": story_id})
     return build_stories(reports, cluster_of, order)[0] if reports else None
-
-
-def list_accepted(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    return conn.execute("SELECT * FROM accepted ORDER BY accepted_at DESC, id").fetchall()
-
-
-def add_accepted(conn: psycopg.Connection, story_id: str, story: dict[str, Any], by: str) -> dict[str, Any]:
-    """A story accepted twice keeps its first acceptance."""
-    conn.execute(
-        "INSERT INTO accepted (id, story, accepted_at, accepted_by) VALUES (%s, %s, now(), %s) "
-        "ON CONFLICT (id) DO NOTHING", (story_id, Jsonb(story), by))
-    return conn.execute("SELECT * FROM accepted WHERE id = %s", (story_id,)).fetchone()
-
-
-def remove_accepted(conn: psycopg.Connection, story_id: str) -> None:
-    conn.execute("DELETE FROM accepted WHERE id = %s", (story_id,))
-
-
-def list_runs(conn: psycopg.Connection, limit: int) -> list[dict[str, Any]]:
-    return conn.execute(
-        "SELECT run_id, started_at, finished_at, stats->'outcome' AS outcome, "
-        "stats->'only_sources' AS only_sources FROM runs ORDER BY started_at DESC LIMIT %s", (limit,)).fetchall()

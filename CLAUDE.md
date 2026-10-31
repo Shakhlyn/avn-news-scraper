@@ -2,8 +2,10 @@
 
 Daily scraper (07:00 Asia/Dhaka) for human-rights news from Bangladeshi outlets. See README.md.
 
-The FastAPI service (`src/avn_scraper/api/`, `./serve.sh`) runs the daily scrape and serves the news
+The FastAPI service (`src/avn_scraper/main.py`, `./serve.sh`) runs the daily scrape and serves the news
 and review API that the AVN site's `/dashboard` reads. FastAPI lives in this repo only.
+Routes go in `api/v1/endpoints/`, models in `schemas/`, SQL in `repositories/`, logic in `services/`;
+the scraping engine is `scraper/`.
 
 - The scraping rules (24-hour window, which tabs / print editions are read, pagination
   stops, what is skipped and kept) are in `docs/scraping-rules.md`. Follow them, and update

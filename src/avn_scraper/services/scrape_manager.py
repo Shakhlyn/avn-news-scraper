@@ -10,9 +10,9 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from ..config import Config
-from ..lock import RunInProgress, run_lock
-from ..pipeline import RunOptions, RunResult, run_pipeline
+from ..scraper.config import Config
+from ..scraper.lock import RunInProgress, run_lock
+from ..scraper.pipeline import RunOptions, RunResult, run_pipeline
 
 log = logging.getLogger(__name__)
 

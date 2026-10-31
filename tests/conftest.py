@@ -5,9 +5,9 @@ import psycopg
 import pytest
 from dotenv import load_dotenv
 
-from avn_scraper.classify import Classifier
-from avn_scraper.config import PROJECT_ROOT, load_config
-from avn_scraper.storage import connect, migrate
+from avn_scraper.scraper.classify import Classifier
+from avn_scraper.scraper.config import PROJECT_ROOT, load_config
+from avn_scraper.scraper.storage import connect, migrate
 
 
 @pytest.fixture(scope="session")

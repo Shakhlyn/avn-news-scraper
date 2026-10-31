@@ -116,22 +116,24 @@ ON CONFLICT (article_id) DO UPDATE SET verified = excluded.verified, notes = exc
 
 | Route | Does |
 |---|---|
-| `GET /api/news` | Stories, with `from`, `to`, `source`, `topic`, `q`, `page`, `limit` |
-| `GET /api/accepted` | Accepted stories |
-| `POST /api/accepted` | Accept a story: `{"id": "<story id>"}` |
-| `DELETE /api/accepted/<id>` | Withdraw a story |
-| `POST /api/scrape` | Scrape now |
-| `GET /api/scrape` | State of the current or last scrape |
-| `GET /api/runs` | Recent runs |
-| `GET /api/health` | Service and database check |
+| `GET /api/v1/news` | Stories, with `from`, `to`, `source`, `topic`, `q`, `page`, `limit` |
+| `GET /api/v1/accepted` | Accepted stories |
+| `POST /api/v1/accepted` | Accept a story: `{"id": "<story id>"}` |
+| `DELETE /api/v1/accepted/<id>` | Withdraw a story |
+| `POST /api/v1/scrape` | Scrape now |
+| `GET /api/v1/scrape` | State of the current or last scrape |
+| `GET /api/v1/runs` | Recent runs |
+| `GET /api/v1/health` | Service and database check |
+
+CORS allows the origins in `CORS_ORIGINS`, by default the AVN dev server. Rate limits are per client address: 120 requests a minute by default, 30 for accepting and withdrawing, 5 for starting a scrape (`core/limiter.py`). Over the limit the answer is 429.
 
 The interactive docs are at `http://127.0.0.1:8100/docs`. The service answers on localhost only, and writes must carry a same-site `Origin`.
 
 ### Scraping by hand
 
 ```bash
-curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/scrape
-curl http://127.0.0.1:8100/api/scrape     # follow it
+curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/v1/scrape
+curl http://127.0.0.1:8100/api/v1/scrape     # follow it
 ./scrape-now.sh                           # same scrape, without the service
 ```
 
@@ -164,7 +166,7 @@ Spot-check the daily CSV for the first week or two, mark false positives in `rev
 
 ```bash
 avn run                                   # scrape now, in this terminal
-curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/scrape   # or: ask the service to scrape now
+curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/v1/scrape   # or: ask the service to scrape now
 journalctl --user -u avn-api -f            # watch the service log
 ```
 
@@ -204,23 +206,31 @@ The AVN site's `/dashboard`, run locally with `npm run dev`, reads this service.
 ## Project layout
 
 ```
-config/            settings.yaml, sources.yaml, keywords.yaml
+config/                settings.yaml, sources.yaml, keywords.yaml
 src/avn_scraper/
-  cli.py           commands
-  publish.py       the news watch file for avnbd.org/dashboard, upload to R2
-  pipeline.py      the daily run + reclassify
-  discover/        rss, sitemap, listing (homepage links), sections (menu tabs + paging), catchall, per-source orchestration
-  fetch.py         polite async HTTP client
-  extract.py       article text/metadata
-  classify.py      keyword scoring
-  normalize.py     Bangla/English text normalization
-  geo.py           district detection (64 districts, Bangla + English)
-  dedupe.py        same-story clustering
-  storage/         Storage interface + Postgres backend
-  migrations/      SQL for the database tables (`avn migrate`)
-  importer.py      one-off import of the old SQLite data
-  api/             FastAPI service: routers/, repository.py (SQL), stories.py, scrape.py, scheduler.py
-  export.py        CSV / Excel
-deploy/            systemd, launchd, cron examples
+  main.py              the FastAPI app: create_app, middleware, lifespan
+  cli.py               the `avn` command
+  api/
+    deps.py            what the routes share
+    v1/router.py       all routes, under /api/v1
+    v1/endpoints/      news, accepted, scrape, runs, health
+  core/                settings, database pool, rate limits, security, error handlers
+  schemas/             request and response models
+  repositories/        SQL: news, accepted, runs
+  services/            stories, scrape manager, daily scheduler
+  scraper/             the engine
+    pipeline.py        the daily run + reclassify
+    discover/          rss, sitemap, listing, sections, catchall
+    fetch.py           polite async HTTP client
+    extract.py         article text/metadata
+    classify.py        keyword scoring
+    normalize.py       Bangla/English text normalization
+    geo.py             district detection
+    dedupe.py          same-story clustering
+    storage/           Storage interface + Postgres backend
+    export.py          CSV / Excel
+    importer.py        one-off import of the old SQLite data
+  migrations/          SQL for the database tables (`avn migrate`)
+deploy/                systemd, launchd, cron examples
 tests/
 ```

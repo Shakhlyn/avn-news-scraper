@@ -16,7 +16,7 @@ def _project_root() -> Path:
         return Path(os.environ["AVN_HOME"]).resolve()
     if (Path.cwd() / "config" / "settings.yaml").exists():
         return Path.cwd()
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 PROJECT_ROOT = _project_root()

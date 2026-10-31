@@ -5,10 +5,10 @@ import httpx
 import pandas as pd
 import pytest
 
-from avn_scraper.discover import sitemap
-from avn_scraper.discover.catchall import unwrap_bing_link
-from avn_scraper.export import _neutralize
-from avn_scraper.fetch import Fetcher
+from avn_scraper.scraper.discover import sitemap
+from avn_scraper.scraper.discover.catchall import unwrap_bing_link
+from avn_scraper.scraper.export import _neutralize
+from avn_scraper.scraper.fetch import Fetcher
 
 SETTINGS = {"respect_robots": False, "per_host_delay": 0, "retries": 0}
 

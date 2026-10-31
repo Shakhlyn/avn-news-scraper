@@ -6,10 +6,10 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 import pytest
 
-from avn_scraper.config import Config
-from avn_scraper.importer import import_sqlite
-from avn_scraper.pipeline import RunOptions, _run, lookback_hours, run_pipeline
-from avn_scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate
+from avn_scraper.scraper.config import Config
+from avn_scraper.scraper.importer import import_sqlite
+from avn_scraper.scraper.pipeline import RunOptions, _run, lookback_hours, run_pipeline
+from avn_scraper.scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate
 
 NOW = datetime(2026, 10, 30, 1, 0, tzinfo=timezone.utc)
 
@@ -85,7 +85,7 @@ def test_a_bad_row_is_counted_and_the_run_goes_on(tmp_path, database, monkeypatc
 
 
 def load_keywords():
-    from avn_scraper.config import load_config
+    from avn_scraper.scraper.config import load_config
     return load_config().keywords
 
 
@@ -103,7 +103,7 @@ def test_a_lost_connection_stops_the_run(tmp_path, database, monkeypatch):
 
 def test_database_down_fails_before_any_web_request(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
-    monkeypatch.setattr("avn_scraper.storage.postgres.time.sleep", lambda _: None)
+    monkeypatch.setattr("avn_scraper.scraper.storage.postgres.time.sleep", lambda _: None)
     config = Config(settings={}, sources=[], keywords={}, config_dir=tmp_path)
     with pytest.raises(DatabaseUnavailable, match="Cannot reach Postgres after 3 tries"):
         asyncio.run(run_pipeline(config, RunOptions(), transport=None))

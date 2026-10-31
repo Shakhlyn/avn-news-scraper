@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 
-from avn_scraper.dedupe import find_cluster
-from avn_scraper.discover.catchall import unwrap_bing_link
-from avn_scraper.discover.listing import find_feed_links, parse_listing
-from avn_scraper.discover.rss import parse_feed
-from avn_scraper.discover.sitemap import parse_sitemap
-from avn_scraper.extract import extract
-from avn_scraper.geo import detect_districts
-from avn_scraper.urls import article_id, canonicalize, slug_text
+from avn_scraper.scraper.dedupe import find_cluster
+from avn_scraper.scraper.discover.catchall import unwrap_bing_link
+from avn_scraper.scraper.discover.listing import find_feed_links, parse_listing
+from avn_scraper.scraper.discover.rss import parse_feed
+from avn_scraper.scraper.discover.sitemap import parse_sitemap
+from avn_scraper.scraper.extract import extract
+from avn_scraper.scraper.geo import detect_districts
+from avn_scraper.scraper.urls import article_id, canonicalize, slug_text
 
 RSS = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
 <item><title>BSF firing kills youth</title><link>https://example.com/a/1</link>
@@ -96,7 +96,7 @@ def test_extract():
 def test_channel24_adapter():
     import json
 
-    from avn_scraper.adapters import find_adapter
+    from avn_scraper.scraper.adapters import find_adapter
 
     url = "https://www.channel24bd.tv/national/article/353669/%E0%A6%B8%E0%A7%8C%E0%A6%A6%E0%A6%BF"
     adapter, api = find_adapter(url)
@@ -126,7 +126,7 @@ def test_extract_prefers_longer_json_ld_body():
 
 
 def test_find_section_links():
-    from avn_scraper.discover.sections import find_section_links
+    from avn_scraper.scraper.discover.sections import find_section_links
 
     html = """<html><body><header><nav class="main-menu"><ul>
     <li><a href="/">প্রচ্ছদ</a></li>
@@ -153,7 +153,7 @@ def test_find_section_links():
 
 
 def test_find_print_links():
-    from avn_scraper.discover.sections import find_print_links
+    from avn_scraper.scraper.discover.sections import find_print_links
 
     html = """<html><body><a href="/printversion">প্রিন্ট সংস্করণ</a>
     <a href="/topic/%E0%A6%9B%E0%A6%BE%E0%A6%AA%E0%A6%BE-%E0%A6%B8%E0%A6%82%E0%A6%B8%E0%A7%8D%E0%A6%95%E0%A6%B0%E0%A6%A3">ছাপা সংস্করণ</a>
@@ -168,7 +168,7 @@ def test_find_print_links():
 
 
 def test_page_is_past_window():
-    from avn_scraper.discover.sections import page_is_past_window
+    from avn_scraper.scraper.discover.sections import page_is_past_window
 
     cutoff = datetime(2026, 10, 20, 1, tzinfo=timezone.utc)
     old = '<time datetime="2026-10-19T08:00:00+06:00"></time>'
@@ -183,7 +183,7 @@ def test_page_is_past_window():
 
 
 def test_find_next_page():
-    from avn_scraper.discover.sections import find_next_page
+    from avn_scraper.scraper.discover.sections import find_next_page
 
     def page(*hrefs, head=""):
         return f"<html><head>{head}</head><body>" + "".join(f'<a href="{h}">{i}</a>' for i, h in enumerate(hrefs)) + "</body></html>"

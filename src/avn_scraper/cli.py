@@ -13,18 +13,19 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
-from .classify import Classifier
-from .config import load_config
-from .discover.sources import EndpointCache, ListingMemory, discover_source
-from .export import export_all
-from .fetch import Fetcher
-from .lock import RunInProgress, run_lock
-from .pipeline import RunOptions, reclassify, run_pipeline
-from .importer import import_sqlite
-from .storage import DatabaseUnavailable, PostgresStorage, connect, migrate as apply_migrations
+from .scraper.classify import Classifier
+from .scraper.config import load_config
+from .scraper.discover.sources import EndpointCache, ListingMemory, discover_source
+from .scraper.export import export_all
+from .scraper.fetch import Fetcher
+from .scraper.lock import RunInProgress, run_lock
+from .scraper.pipeline import RunOptions, reclassify, run_pipeline
+from .scraper.importer import import_sqlite
+from .scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate as apply_migrations
 
 app = typer.Typer(add_completion=False, help="Bangladesh human-rights news scraper.")
 console = Console()
@@ -207,13 +208,13 @@ def serve(
     """Run the service: news API, review desk API, and the daily scrape."""
     import uvicorn  # only the service needs it
 
-    from .api import create_app
+    from .main import create_app
 
     _setup_logging(verbose)
     try:
         api = create_app(schedule=not no_schedule)
-    except DatabaseUnavailable as exc:
-        console.print(f"[red]{exc}[/]")
+    except ValidationError:
+        console.print("[red]DATABASE_URL is not set. Copy .env.example to .env and fill it in.[/]")
         raise typer.Exit(1)
     uvicorn.run(api, host=host, port=port, log_level="info")
 

@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 import httpx
 import pandas as pd
 
-from avn_scraper.config import Config, Source
-from avn_scraper.pipeline import RunOptions, run_pipeline
-from avn_scraper.storage import PostgresStorage
+from avn_scraper.scraper.config import Config, Source
+from avn_scraper.scraper.pipeline import RunOptions, run_pipeline
+from avn_scraper.scraper.storage import PostgresStorage
 
 SITE = "http://93.184.215.14"  # public IP literal: passes the SSRF guard without DNS
 NOW = datetime.now(timezone.utc).isoformat()

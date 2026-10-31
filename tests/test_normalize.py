@@ -1,6 +1,6 @@
 import unicodedata
 
-from avn_scraper.normalize import detect_language, normalize
+from avn_scraper.scraper.normalize import detect_language, normalize
 
 
 def test_bangla_digits_become_ascii():

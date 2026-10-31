@@ -1,7 +1,7 @@
 import pytest
 
-from avn_scraper.export import _sheet_name
-from avn_scraper.lock import RunInProgress, run_lock
+from avn_scraper.scraper.export import _sheet_name
+from avn_scraper.scraper.lock import RunInProgress, run_lock
 
 
 def test_sheet_names_valid_and_unique():

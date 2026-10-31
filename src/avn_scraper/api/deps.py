@@ -1,11 +1,15 @@
-"""What the routes share: the database, the reviewing switch, the write check."""
+"""What the routes share."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Annotated
 
 import psycopg
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
+
+from ..core.config import Settings
+from ..services.scrape_manager import ScrapeManager
 
 
 def get_db(request: Request) -> Iterator[psycopg.Connection]:
@@ -13,17 +17,19 @@ def get_db(request: Request) -> Iterator[psycopg.Connection]:
         yield conn
 
 
-Db = Depends(get_db)
+def get_settings(request: Request) -> Settings:
+    return request.app.state.settings
 
 
-def require_reviewing(request: Request) -> None:
-    if not request.app.state.reviewing:
-        raise HTTPException(403, "Stories are accepted on the review desk only.")
+def get_scrapes(request: Request) -> ScrapeManager:
+    return request.app.state.scrapes
 
 
-def same_origin(request: Request) -> None:
-    """Writes come from the desk's own pages only: a browser always sends Origin on a
-    POST or DELETE, and another site cannot fake it."""
-    host = request.headers.get("host", "")
-    if request.headers.get("origin") not in (f"http://{host}", f"https://{host}"):
-        raise HTTPException(403, "Cross-site request refused.")
+def get_category_order(request: Request) -> list[str]:
+    return request.app.state.category_order
+
+
+Db = Annotated[psycopg.Connection, Depends(get_db)]
+CurrentSettings = Annotated[Settings, Depends(get_settings)]
+Scrapes = Annotated[ScrapeManager, Depends(get_scrapes)]
+CategoryOrder = Annotated[list[str], Depends(get_category_order)]

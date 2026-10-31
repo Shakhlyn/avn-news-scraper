@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from .scrape import ScrapeManager
+from .scrape_manager import ScrapeManager
 
 log = logging.getLogger(__name__)
 
