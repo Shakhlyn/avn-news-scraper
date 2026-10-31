@@ -2,12 +2,12 @@
 timezone: Asia/Dhaka
 data_dir: data
 
-# How far back to look on each run. The job runs daily at 07:00 (Asia/Dhaka), so
+# How far back to look on each run. The service scrapes daily at 07:00 (Asia/Dhaka), so
 # 24h covers exactly the news since the previous run.
 window_hours: 24
 
-# When the service (`avn serve`) starts the daily scrape, in `timezone`. If the PC was
-# off then, it scrapes as soon as it is back.
+# When the service (`avn serve`) starts the daily scrape, in `timezone`. If it was not
+# running then, it scrapes soon after it starts.
 daily_at: "07:00"
 
 http:

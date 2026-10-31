@@ -1,4 +1,4 @@
-"""One run at a time: the 07:00 timer and a manual `avn run` must not overlap."""
+"""One run at a time: the service and a manual `avn run` must not overlap."""
 
 from __future__ import annotations
 

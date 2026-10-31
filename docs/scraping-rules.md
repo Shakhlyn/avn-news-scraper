@@ -6,7 +6,8 @@ and outlets in `config/sources.yaml`.
 
 ## Schedule and time window
 
-- The job runs **once a day at 07:00 Asia/Dhaka** (`deploy/`).
+- The service (`./serve.sh`) runs the job **once a day at 07:00 Asia/Dhaka**, while it is running.
+  Nothing on the PC starts it automatically.
 - Each run looks back **24 hours** (`window_hours: 24`): from 07:00 yesterday to now.
   Nothing older is kept, so news is not repeated across days.
 - If a day was missed (PC off, run failed), catch up with `avn run --since 48`, or with

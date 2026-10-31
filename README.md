@@ -106,9 +106,9 @@ ON CONFLICT (article_id) DO UPDATE SET verified = excluded.verified, notes = exc
 
 ## The service
 
-`./serve.sh` starts the FastAPI service on `127.0.0.1:8100`, after starting the database if it is stopped. On this machine the `avn-api` user service keeps it running from boot (`deploy/avn-api.service`). It does three jobs:
+`./serve.sh` starts the FastAPI service on `127.0.0.1:8100`, after starting the database if it is stopped. You start it yourself: nothing on the PC starts it or runs a scrape automatically. While it runs, it does three jobs:
 
-- **Daily scrape:** at `daily_at` in `settings.yaml` (07:00 Dhaka). It checks every minute, so if the PC was off, it scrapes as soon as it is back with a network. A failed run is retried after 30 minutes. The look-back reaches the start of the last full run, and is never shorter than `window_hours`: after 3 days off it covers 72 hours. The 80-per-outlet cap still applies per run, and outlets may no longer list very old items, so a long gap may not be recovered in full.
+- **Daily scrape:** at `daily_at` in `settings.yaml` (07:00 Dhaka), only while the service is running. It checks every minute, so if the service wasn't running at 07:00, it scrapes soon after you start it. A failed run is retried after 30 minutes. The look-back reaches the start of the last full run, and is never shorter than `window_hours`: after 3 days off it covers 72 hours. The 80-per-outlet cap still applies per run, and outlets may no longer list very old items, so a long gap may not be recovered in full.
 - **News API:** what the AVN site's `/dashboard` reads.
 - **Review desk API:** accepting and withdrawing stories.
 
@@ -167,23 +167,13 @@ Spot-check the daily CSV for the first week or two, mark false positives in `rev
 ```bash
 avn run                                   # scrape now, in this terminal
 curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/v1/scrape   # or: ask the service to scrape now
-journalctl --user -u avn-api -f            # watch the service log
 ```
 
-A manual run doesn't disturb the schedule. Articles already saved are skipped, so running more often than daily is safe. Only one run can happen at a time: if the 07:00 job is running, `avn run` (and `avn reclassify`) says so and exits.
+Articles already saved are skipped, so running more often than daily is safe. Only one run can happen at a time: if the service is scraping, `avn run` (and `avn reclassify`) says so and exits.
 
-## Scheduling
+`Dockerfile`: the image runs one scrape and exits. Mount a volume at `/app/data`.
 
-Installed on this Linux PC: `systemctl --user status avn-api` shows the service. To stop it: `systemctl --user disable --now avn-api`.
-
-| Where | How |
-|---|---|
-| Linux (recommended) | systemd user service, `deploy/avn-api.service`. The service scrapes at 07:00 Asia/Dhaka whatever the machine's timezone, and catches up if the PC was off. |
-| macOS | launchd, `deploy/com.avn.newsscraper.plist` (uses the Mac's local time) |
-| Plain cron | `deploy/crontab.example` |
-| Cloud | `Dockerfile`: the image runs one scrape and exits. Schedule it at `0 1 * * *` UTC (= 07:00 Dhaka) and mount a volume at `/app/data`. |
-
-### Cloud (Cloudflare) notes
+## Cloud (Cloudflare) notes
 
 Plain Cloudflare Workers are a poor fit. Python Workers run on Pyodide, have CPU-time and subrequest limits, and can't run `trafilatura`/`lxml` across ~50 sites. The recommended path:
 
@@ -231,6 +221,5 @@ src/avn_scraper/
     export.py          CSV / Excel
     importer.py        one-off import of the old SQLite data
   migrations/          SQL for the database tables (`avn migrate`)
-deploy/                systemd, launchd, cron examples
 tests/
 ```
