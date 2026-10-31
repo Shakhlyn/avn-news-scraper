@@ -1,4 +1,4 @@
 from .base import Storage
-from .local import LocalStorage
+from .postgres import DatabaseUnavailable, PostgresStorage, connect, migrate
 
-__all__ = ["Storage", "LocalStorage"]
+__all__ = ["Storage", "PostgresStorage", "DatabaseUnavailable", "connect", "migrate"]

@@ -17,10 +17,13 @@ import pandas as pd
 from .storage import Storage
 
 _MATCHES_SQL = """
-SELECT a.published_date, c.category, a.source_name, a.source_type, a.language, a.title, a.url,
-       a.district, a.districts_mentioned, c.score, c.matched_terms, a.story_cluster_id,
-       a.published_at, a.scraped_at, substr(a.body, 1, 400) AS excerpt, a.body_missing,
-       a.id AS article_id, a.json_path, r.verified, r.notes
+SELECT a.published_date::text AS published_date, c.category, a.source_name, a.source_type, a.language,
+       a.title, a.url, a.district, array_to_string(a.districts_mentioned, ',') AS districts_mentioned,
+       c.score, c.matched_terms::text AS matched_terms, a.story_cluster_id,
+       to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS published_at,
+       to_char(a.scraped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS scraped_at,
+       substr(a.body, 1, 400) AS excerpt, a.body_missing::int AS body_missing,
+       a.id AS article_id, r.verified, r.notes
 FROM article_categories c
 JOIN articles a ON a.id = c.article_id
 LEFT JOIN review r ON r.article_id = a.id

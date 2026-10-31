@@ -1,16 +1,17 @@
-"""Command line: `avn run`, `avn check-sources`, `avn export`, `avn reclassify`, `avn publish`, `avn stats`."""
+"""Command line: `avn run`, `avn check-sources`, `avn export`, `avn reclassify`, `avn stats`,
+`avn migrate`, `avn import-sqlite`, `avn serve`."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+import psycopg
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -22,8 +23,8 @@ from .export import export_all
 from .fetch import Fetcher
 from .lock import RunInProgress, run_lock
 from .pipeline import RunOptions, reclassify, run_pipeline
-from .publish import build_news, to_json, upload_r2
-from .storage import LocalStorage
+from .importer import import_sqlite
+from .storage import DatabaseUnavailable, PostgresStorage, connect, migrate as apply_migrations
 
 app = typer.Typer(add_completion=False, help="Bangladesh human-rights news scraper.")
 console = Console()
@@ -39,6 +40,14 @@ def _setup_logging(verbose: bool) -> None:
     logging.getLogger("trafilatura").setLevel(logging.ERROR)
 
 
+def _storage(cfg) -> PostgresStorage:
+    try:
+        return PostgresStorage(cfg.data_dir)
+    except DatabaseUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+
 def _split(value: Optional[str]) -> Optional[list[str]]:
     return [v.strip() for v in value.split(",") if v.strip()] if value else None
 
@@ -46,6 +55,7 @@ def _split(value: Optional[str]) -> Optional[list[str]]:
 @app.command()
 def run(
     since: Optional[float] = typer.Option(None, help="Look back this many hours (default: settings window_hours)"),
+    since_last_run: bool = typer.Option(False, "--since-last-run", help="Look back to the last full run, at least window_hours"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Do everything except saving; print matches"),
     sources: Optional[str] = typer.Option(None, help="Comma separated source ids to limit the run"),
     no_prefilter: bool = typer.Option(False, "--no-prefilter", help="Download every new article, not just keyword hits (slow)"),
@@ -56,13 +66,22 @@ def run(
     """Scrape, classify and store today's relevant news."""
     _setup_logging(verbose)
     cfg = load_config(config)
-    opts = RunOptions(since_hours=since, dry_run=dry_run, prefilter=not no_prefilter,
+    if since is not None and since_last_run:
+        console.print("[red]Use --since or --since-last-run, not both.[/]")
+        raise typer.Exit(2)
+    opts = RunOptions(since_hours=since, since_last_run=since_last_run, dry_run=dry_run, prefilter=not no_prefilter,
                       only_sources=_split(sources), catchall=catchall)
     try:
         with run_lock(cfg.data_dir / ".run.lock"):
             result = asyncio.run(run_pipeline(cfg, opts))
     except RunInProgress as exc:
         console.print(f"[yellow]A scrape is already running ({exc}); not starting another.[/]")
+        raise typer.Exit(1)
+    except DatabaseUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except psycopg.OperationalError as exc:
+        console.print(f"[red]Lost the database during the run ({exc}). Run again once it is back.[/]")
         raise typer.Exit(1)
 
     st = result.stats
@@ -81,7 +100,7 @@ def run(
         console.print(f"Downloads that failed: {dict(reasons)} "
                       "(blocked pages are judged by headline; temporary errors retry next run)")
     if result.saved:
-        title = "Would save (dry run)" if dry_run else f"Saved to {cfg.data_dir}"
+        title = "Would save (dry run)" if dry_run else "Saved to Postgres"
         table = Table("date", "source", "categories", "title", title=title, show_lines=False)
         for r in result.saved:
             table.add_row(r["published_date"], r["source_name"],
@@ -138,7 +157,7 @@ def export(
 ) -> None:
     """Rebuild CSV / Excel exports from the database."""
     cfg = load_config(config)
-    storage = LocalStorage(cfg.data_dir)
+    storage = _storage(cfg)
     the_day = date.fromisoformat(day) if day else datetime.now(ZoneInfo(cfg.timezone)).date()
     counts = export_all(storage, cfg.data_dir / "exports", Classifier(cfg.keywords).labels, cfg.timezone, day=the_day)
     storage.close()
@@ -160,39 +179,10 @@ def reclassify_cmd(config: Optional[Path] = ConfigOpt) -> None:
 
 
 @app.command()
-def publish(
-    hours: Optional[float] = typer.Option(None, help="Articles stored in this many hours (default: settings publish.hours)"),
-    out: Optional[Path] = typer.Option(None, "--out", help="Write the JSON to this file instead of uploading to R2"),
-    config: Optional[Path] = ConfigOpt,
-) -> None:
-    """Build the news watch file for the staging review desk and upload it to R2."""
-    cfg = load_config(config)
-    pub = cfg.settings.get("publish") or {}
-    storage = LocalStorage(cfg.data_dir)
-    payload = build_news(storage, list((cfg.keywords.get("categories") or {}).keys()),
-                         hours=hours or float(pub.get("hours", 24)))
-    storage.close()
-    body = to_json(payload)
-    n_reports = sum(len(s["reports"]) for s in payload["stories"])
-    summary = f"{len(payload['stories'])} stories, {n_reports} reports since {payload['from']}"
-    if out:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(body)
-        console.print(f"{summary} -> {out}")
-        return
-    try:
-        key = upload_r2(body)
-    except RuntimeError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1)
-    console.print(f"{summary} -> r2://{os.environ['R2_BUCKET']}/{key}")
-
-
-@app.command()
 def stats(config: Optional[Path] = ConfigOpt) -> None:
     """Article counts per category and per source."""
     cfg = load_config(config)
-    storage = LocalStorage(cfg.data_dir)
+    storage = _storage(cfg)
     if storage.query_df("SELECT COUNT(*) AS n FROM articles")["n"][0] == 0:
         console.print("No articles saved yet. Run `avn run` first.")
         storage.close()
@@ -205,6 +195,58 @@ def stats(config: Optional[Path] = ConfigOpt) -> None:
         "SELECT source_name, COUNT(DISTINCT article_id) AS articles FROM v_matches "
         "GROUP BY source_name ORDER BY articles DESC LIMIT 30").to_string(index=False))
     storage.close()
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Address to listen on"),
+    port: int = typer.Option(8100, help="Port to listen on"),
+    no_schedule: bool = typer.Option(False, "--no-schedule", help="Serve the API without the daily scrape"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run the service: news API, review desk API, and the daily scrape."""
+    import uvicorn  # only the service needs it
+
+    from .api import create_app
+
+    _setup_logging(verbose)
+    try:
+        api = create_app(schedule=not no_schedule)
+    except DatabaseUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    uvicorn.run(api, host=host, port=port, log_level="info")
+
+
+@app.command()
+def migrate() -> None:
+    """Create or update the database tables."""
+    try:
+        conn = connect()
+    except DatabaseUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    applied = apply_migrations(conn)
+    conn.close()
+    console.print(f"Applied: {', '.join(applied)}" if applied else "Nothing to apply.")
+
+
+@app.command("import-sqlite")
+def import_sqlite_cmd(
+    sqlite: Optional[Path] = typer.Option(None, help="Old database (default: data/db/news.sqlite)"),
+    accepted: Optional[Path] = typer.Option(None, help="The site's accepted.json, if any"),
+    config: Optional[Path] = ConfigOpt,
+) -> None:
+    """Once: copy the old SQLite data and accepted stories into Postgres."""
+    cfg = load_config(config)
+    path = sqlite or cfg.data_dir / "db" / "news.sqlite"
+    if not path.exists():
+        console.print(f"[red]{path} does not exist.[/]")
+        raise typer.Exit(1)
+    storage = _storage(cfg)
+    counts = import_sqlite(storage, path, accepted)
+    storage.close()
+    console.print(f"New rows: {counts}")
 
 
 if __name__ == "__main__":

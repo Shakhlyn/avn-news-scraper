@@ -1,7 +1,6 @@
 """End-to-end run against a fake news site served by httpx.MockTransport."""
 
 import asyncio
-import json
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -10,7 +9,7 @@ import pandas as pd
 
 from avn_scraper.config import Config, Source
 from avn_scraper.pipeline import RunOptions, run_pipeline
-from avn_scraper.storage import LocalStorage
+from avn_scraper.storage import PostgresStorage
 
 SITE = "http://93.184.215.14"  # public IP literal: passes the SSRF guard without DNS
 NOW = datetime.now(timezone.utc).isoformat()
@@ -60,7 +59,7 @@ def make_config(tmp_path, keywords) -> Config:
     return Config(settings=settings, sources=[source], keywords=keywords, config_dir=tmp_path)
 
 
-def test_end_to_end_run(tmp_path, cfg):
+def test_end_to_end_run(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords)
     requests: Counter = Counter()
 
@@ -78,14 +77,13 @@ def test_end_to_end_run(tmp_path, cfg):
     assert headline_only["body_missing"] and headline_only["categories"][0]["category"] == "border_killing"
     assert {f["reason"] for f in result.stats["fetch_failed"]} == {"http_403", "http_503"}
 
-    # stored: JSON per article, raw HTML for the downloaded one, DB rows, exports
-    storage = LocalStorage(tmp_path)
+    # stored: DB rows, raw HTML for the downloaded one, exports
+    storage = PostgresStorage(tmp_path)
     rows = storage.query_df("SELECT * FROM v_matches")
     assert set(rows["url"]) == {SITE + "/news/1", SITE + "/news/2"}
-    paths = storage.query_df("SELECT json_path, raw_path FROM articles WHERE url = ?", (SITE + "/news/1",)).iloc[0]
+    stored = storage.query_df("SELECT title, raw_path FROM articles WHERE url = %s", (SITE + "/news/1",)).iloc[0]
     storage.close()
-    record = json.loads((tmp_path / paths["json_path"]).read_text(encoding="utf-8"))
-    assert record["title"] == full["title"] and (tmp_path / paths["raw_path"]).exists()
+    assert stored["title"] == full["title"] and (tmp_path / stored["raw_path"]).exists()
     assert (tmp_path / "exports" / "master.xlsx").exists()
     assert len(pd.read_csv(next((tmp_path / "exports" / "daily").glob("*.csv")))) == 2
 
@@ -120,7 +118,7 @@ def make_tab_site(requests: Counter):
     return httpx.MockTransport(handler)
 
 
-def test_section_tabs_and_pagination(tmp_path, cfg):
+def test_section_tabs_and_pagination(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords)
     requests: Counter = Counter()
 

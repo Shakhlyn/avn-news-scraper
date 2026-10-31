@@ -1,4 +1,4 @@
 # Plain cron alternative (Linux/macOS). Cron uses the machine's timezone:
 #   machine on Asia/Dhaka -> "0 7 * * *";  machine on UTC -> "0 1 * * *".
 # Install with: crontab -e
-0 7 * * * cd /path/to/avn_news_scraper && .venv/bin/avn run >> data/logs/cron.log 2>&1
+0 7 * * * cd /path/to/avn_news_scraper && ./scrape-now.sh >> data/logs/cron.log 2>&1

@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+import psycopg
 
 from .adapters import find_adapter
 from .classify import Classifier
@@ -25,7 +26,7 @@ from .extract import Extracted, extract
 from .fetch import Fetcher
 from .geo import detect_districts
 from .normalize import detect_language
-from .storage import LocalStorage
+from .storage import PostgresStorage, Storage
 from .urls import article_id, host_of, same_site, slug_text
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class RunOptions:
     since_hours: float | None = None
+    since_last_run: bool = False  # look back to the last full run, at least window_hours
     dry_run: bool = False
     prefilter: bool = True
     only_sources: list[str] | None = None
@@ -114,18 +116,40 @@ async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | N
     return c, html, ex
 
 
+def lookback_hours(window: float, last_run: datetime | None, now: datetime) -> float:
+    """Hours back to `last_run`, never fewer than `window`."""
+    if last_run is None:
+        return window
+    return max(window, (now - last_run).total_seconds() / 3600)
+
+
 async def run_pipeline(cfg: Config, opts: RunOptions,
                        transport: httpx.AsyncBaseTransport | None = None) -> RunResult:
+    """Fails before any web request if the database cannot be used."""
+    storage = PostgresStorage(cfg.data_dir)
+    try:
+        return await _run(cfg, opts, storage, transport)
+    finally:
+        storage.close()
+
+
+async def _run(cfg: Config, opts: RunOptions, storage: Storage,
+               transport: httpx.AsyncBaseTransport | None) -> RunResult:
     s = cfg.settings
     tz = ZoneInfo(cfg.timezone)
     started = datetime.now(timezone.utc)
     run_id = started.strftime("%Y%m%dT%H%M%SZ")
-    cutoff = started - timedelta(hours=opts.since_hours or float(s.get("window_hours", 24)))
+    hours = opts.since_hours or float(s.get("window_hours", 24))
+    if opts.since_last_run:
+        hours = lookback_hours(hours, storage.last_full_run(), started)
+    cutoff = started - timedelta(hours=hours)
     classifier = Classifier(cfg.keywords)
-    storage = LocalStorage(cfg.data_dir)
-    storage.upsert_sources(cfg.sources)
+    if not opts.dry_run:
+        storage.upsert_sources(cfg.sources)
     stats: dict[str, Any] = {"run_id": run_id, "started_at": started.isoformat(timespec="seconds"),
                              "cutoff": cutoff.isoformat(timespec="seconds"), "dry_run": opts.dry_run}
+    if opts.only_sources:  # a partial run must not count as the last full run
+        stats["only_sources"] = opts.only_sources
 
     sources = [src for src in cfg.sources if src.enabled and (not opts.only_sources or src.id in opts.only_sources)]
     # Disabled outlets still name their catch-all results.
@@ -259,7 +283,14 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
             "run_id": run_id,
         }
         if not opts.dry_run:
-            storage.save_article(record, html)
+            try:
+                storage.save_article(record, html)
+            except psycopg.OperationalError:
+                raise  # the database went away: stop, the next run covers these articles
+            except psycopg.Error as exc:
+                log.error("could not save %s: %r", c.url, exc)
+                outcome["db_failed"] += 1
+                continue
         saved.append(record)
         outcome["saved"] += 1
         if not ex.body:
@@ -288,14 +319,13 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
         local = started.astimezone(tz)
         (log_dir / f"{local:%Y-%m-%d_%H%M%S}.json").write_text(
             json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
-    storage.close()
     return RunResult(run_id, stats, saved)
 
 
 def reclassify(cfg: Config) -> Counter[str]:
     """Re-apply keywords.yaml to every stored article (no network)."""
     classifier = Classifier(cfg.keywords)
-    storage = LocalStorage(cfg.data_dir)
+    storage = PostgresStorage(cfg.data_dir)
     counts: Counter[str] = Counter()
     for art in list(storage.iter_articles()):
         matches = classifier.classify(art["title"] or "", art["body"] or "", art["summary"] or "")

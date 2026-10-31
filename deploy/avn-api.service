@@ -1,0 +1,18 @@
+# systemd user service: the AVN news service, always on. It serves the API and runs
+# the daily scrape itself, catching up after a boot. Install (Linux):
+#   cp deploy/avn-api.service ~/.config/systemd/user/
+#   # edit the paths below to your checkout, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now avn-api.service
+#   loginctl enable-linger $USER     # start at boot, without logging in
+# Check:  systemctl --user status avn-api ; journalctl --user -u avn-api
+[Unit]
+Description=AVN news service
+
+[Service]
+WorkingDirectory=%h/project/office/side-project/avn/avn_news_scraper
+ExecStart=%h/project/office/side-project/avn/avn_news_scraper/serve.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

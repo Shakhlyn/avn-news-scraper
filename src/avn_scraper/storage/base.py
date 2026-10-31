@@ -1,11 +1,10 @@
-"""Storage interface. LocalStorage (filesystem + SQLite) implements it today; a
-cloud backend (e.g. Cloudflare R2 for files + D1 for the index) can implement the
-same methods later without touching the pipeline."""
+"""Storage interface, implemented by PostgresStorage."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -41,6 +40,10 @@ class Storage(ABC):
 
     @abstractmethod
     def save_run(self, run_id: str, started_at: str, finished_at: str, stats: dict[str, Any]) -> None: ...
+
+    @abstractmethod
+    def last_full_run(self) -> datetime | None:
+        """When the last finished run over all outlets started."""
 
     @abstractmethod
     def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame: ...

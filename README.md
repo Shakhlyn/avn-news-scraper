@@ -13,20 +13,23 @@ Runs every morning at 07:00 Bangladesh time and scans Bangladeshi newspapers, TV
 | `digital_security_act` | Digital Security Act / Cyber Security Act and Ordinance / ICT Act |
 | `july_uprising` | July uprising ("July 36") |
 
-Each matching article is saved with its full text, original HTML and metadata. It is indexed in SQLite and exported to CSV/Excel.
+Each matching article is saved with its full text, original HTML and metadata. It is stored in Postgres and exported to CSV/Excel.
 
 ## Setup
 
 ```bash
 uv venv --python 3.12 .venv          # or: python3.12 -m venv .venv
 uv pip install -e ".[dev]"           # or: .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest                     # classifier + parser tests
+cp .env.example .env                 # then fill in the database password
+.venv/bin/avn migrate                # create the tables
+.venv/bin/pytest                     # needs TEST_DATABASE_URL and the database running
 ```
 
 ## Commands
 
 ```bash
 avn run                      # the daily job: scrape, classify, save, export
+avn run --since-last-run     # look back to the last full run, at least window_hours
 avn run --dry-run            # same, but only print what would be saved
 avn run --since 72           # look back 72 hours instead of the default 24
 avn run --sources prothomalo,dailystar
@@ -36,8 +39,8 @@ avn check-sources --refresh  # re-discover feeds/sitemaps
 avn reclassify               # re-apply keywords.yaml to stored articles (no network)
 avn export                   # rebuild CSV / Excel from the database
 avn stats                    # counts per category and per outlet
-avn publish                  # upload the last 24 hours to R2 for avnbd.org/dashboard
-avn publish --out news.json  # write that file here instead (no upload)
+avn migrate                  # create or update the database tables
+avn serve                    # the service: API + daily scrape (or ./serve.sh)
 ```
 
 Use `.venv/bin/avn`, or activate the venv first.
@@ -48,7 +51,7 @@ Use `.venv/bin/avn`, or activate the venv first.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
 3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).
-5. **Store**: one JSON file per article, the raw HTML (gzipped), and a row in SQLite. The same story from different outlets gets the same `story_cluster_id`, and the district is guessed from the text.
+5. **Store**: a row in Postgres and the raw HTML (gzipped) on disk. The same story from different outlets gets the same `story_cluster_id`, and the district is guessed from the text.
 6. **Export**: daily CSV, one CSV per category, and `master.xlsx`.
 
 URLs that were checked and didn't match are remembered, so they aren't downloaded again.
@@ -61,10 +64,12 @@ The run log lists every failed download with its reason.
 
 ## Data layout
 
+Postgres holds the articles, categories, dedup history, run history and the stories the team accepts. It is the Docker stack in `avn_postgres_db/pg-stack`, and `DATABASE_URL` in `.env` points at it (copy `.env.example`). Create or update the tables with `avn migrate`.
+
+Files stay on disk for what does not belong in the database:
+
 ```
 data/
-  db/news.sqlite                         master index (SQL / pandas)
-  articles/YYYY/MM/DD/<source>/<id>.json full record: text, metadata, matched keywords
   raw/YYYY/MM/DD/<source>/<id>.html.gz   original page, for re-parsing later (.json.gz for API-read sites)
   exports/
     daily/YYYY-MM-DD.csv                 articles found that day
@@ -75,32 +80,62 @@ data/
   cache/listing_seen.json                links seen on section pages (where paging stops)
 ```
 
-Folders are organized by publication date (Dhaka time). An article is stored once. Category views come from the database and exports, since one article can belong to several categories.
+An article is stored once. Category views come from the database and exports, since one article can belong to several categories.
 
 CSV files are UTF-8 with BOM, so Excel displays Bangla correctly.
 
-### SQLite
+### Tables
 
-- `articles`: one row per article (`title`, `body`, `source_name`, `published_at` (UTC), `published_date` (Dhaka), `district`, `story_cluster_id`, `body_missing`, …)
+- `articles`: one row per article (`title`, `body`, `source_name`, `published_at`, `published_date` (Dhaka), `district`, `story_cluster_id`, `body_missing`, …)
 - `article_categories`: (`article_id`, `category`, `score`, `matched_terms`)
 - `v_matches`: view joining the two, one row per article and category. Start here.
 - `review`: your manual verdicts (`verified` = 1 relevant / 0 false positive, `notes`)
-- `articles_fts`: full-text search that works for Bangla and English
-- `sources`, `runs`, `seen_urls`
+- `accepted`: stories accepted on the AVN site's `/dashboard`, each a copy of the story at that moment
+- `sources`, `runs`, `seen_urls`, `schema_migrations`
 
-```python
-import sqlite3, pandas as pd
-con = sqlite3.connect("data/db/news.sqlite")
-df = pd.read_sql("SELECT * FROM v_matches", con)
-df.groupby(["category", "published_date"]).article_id.nunique()
+```sql
+SELECT published_date, category, count(DISTINCT article_id) FROM v_matches GROUP BY 1, 2;
 
-# full-text search
-pd.read_sql("""SELECT a.published_date, a.source_name, a.title FROM articles_fts f
-               JOIN articles a ON a.rowid = f.rowid WHERE articles_fts MATCH '"আয়নাঘর"'""", con)
+-- search, Bangla or English
+SELECT published_date, source_name, title FROM articles WHERE title ILIKE '%আয়নাঘর%' OR body ILIKE '%আয়নাঘর%';
 
-# mark a false positive
-con.execute("INSERT OR REPLACE INTO review(article_id, verified, notes) VALUES (?, 0, 'not relevant')", ("<id>",)); con.commit()
+-- mark a false positive
+INSERT INTO review(article_id, verified, notes) VALUES ('<id>', 0, 'not relevant')
+ON CONFLICT (article_id) DO UPDATE SET verified = excluded.verified, notes = excluded.notes;
 ```
+
+## The service
+
+`./serve.sh` starts the FastAPI service on `127.0.0.1:8100`, after starting the database if it is stopped. On this machine the `avn-api` user service keeps it running from boot (`deploy/avn-api.service`). It does three jobs:
+
+- **Daily scrape:** at `daily_at` in `settings.yaml` (07:00 Dhaka). It checks every minute, so if the PC was off, it scrapes as soon as it is back with a network. A failed run is retried after 30 minutes. The look-back reaches the start of the last full run, and is never shorter than `window_hours`: after 3 days off it covers 72 hours. The 80-per-outlet cap still applies per run, and outlets may no longer list very old items, so a long gap may not be recovered in full.
+- **News API:** what the AVN site's `/dashboard` reads.
+- **Review desk API:** accepting and withdrawing stories.
+
+`AVN_REVIEW=on` in `.env` behaves like staging: all news, Accept, and manual scrapes. Empty behaves like production: accepted stories only, read-only.
+
+| Route | Does |
+|---|---|
+| `GET /api/news` | Stories, with `from`, `to`, `source`, `topic`, `q`, `page`, `limit` |
+| `GET /api/accepted` | Accepted stories |
+| `POST /api/accepted` | Accept a story: `{"id": "<story id>"}` |
+| `DELETE /api/accepted/<id>` | Withdraw a story |
+| `POST /api/scrape` | Scrape now |
+| `GET /api/scrape` | State of the current or last scrape |
+| `GET /api/runs` | Recent runs |
+| `GET /api/health` | Service and database check |
+
+The interactive docs are at `http://127.0.0.1:8100/docs`. The service answers on localhost only, and writes must carry a same-site `Origin`.
+
+### Scraping by hand
+
+```bash
+curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/scrape
+curl http://127.0.0.1:8100/api/scrape     # follow it
+./scrape-now.sh                           # same scrape, without the service
+```
+
+Only one scrape can go at a time, whichever way it was started. If the database is down, `avn run` stops with a clear error before any web request.
 
 ## Tuning the keywords
 
@@ -129,19 +164,19 @@ Spot-check the daily CSV for the first week or two, mark false positives in `rev
 
 ```bash
 avn run                                   # scrape now, in this terminal
-systemctl --user start avn-scraper        # or: run the scheduled job now, in the background
-journalctl --user -u avn-scraper -f       # watch the scheduled job's log
+curl -X POST -H 'Origin: http://127.0.0.1:8100' http://127.0.0.1:8100/api/scrape   # or: ask the service to scrape now
+journalctl --user -u avn-api -f            # watch the service log
 ```
 
 A manual run doesn't disturb the schedule. Articles already saved are skipped, so running more often than daily is safe. Only one run can happen at a time: if the 07:00 job is running, `avn run` (and `avn reclassify`) says so and exits.
 
 ## Scheduling
 
-Installed on this Linux PC: `systemctl --user list-timers avn-scraper.timer` shows the next run. To stop it: `systemctl --user disable --now avn-scraper.timer`.
+Installed on this Linux PC: `systemctl --user status avn-api` shows the service. To stop it: `systemctl --user disable --now avn-api`.
 
 | Where | How |
 |---|---|
-| Linux (recommended) | systemd user timer, `deploy/avn-scraper.{service,timer}`. Runs at 07:00 Asia/Dhaka whatever the machine's timezone, and catches up if the PC was off. |
+| Linux (recommended) | systemd user service, `deploy/avn-api.service`. The service scrapes at 07:00 Asia/Dhaka whatever the machine's timezone, and catches up if the PC was off. |
 | macOS | launchd, `deploy/com.avn.newsscraper.plist` (uses the Mac's local time) |
 | Plain cron | `deploy/crontab.example` |
 | Cloud | `Dockerfile`: the image runs one scrape and exits. Schedule it at `0 1 * * *` UTC (= 07:00 Dhaka) and mount a volume at `/app/data`. |
@@ -151,7 +186,7 @@ Installed on this Linux PC: `systemctl --user list-timers avn-scraper.timer` sho
 Plain Cloudflare Workers are a poor fit. Python Workers run on Pyodide, have CPU-time and subrequest limits, and can't run `trafilatura`/`lxml` across ~50 sites. The recommended path:
 
 - Run the Docker image on **Cloudflare Containers**, started by a Worker **Cron Trigger** (`0 1 * * *`).
-- Store results in **R2** (files) and **D1** (SQLite-compatible index) by writing a new backend that implements `src/avn_scraper/storage/base.py`. That adapter is not written yet.
+- Point `DATABASE_URL` at a Postgres the container can reach. The `avn-postgres` stack on this machine listens on localhost only.
 
 The same image also runs unchanged on GitHub Actions (scheduled workflow) or any VPS.
 
@@ -162,38 +197,9 @@ docker run --rm -v "$PWD/data:/app/data" avn-news-scraper run
 
 Set `AVN_HOME` to point the tool at a different project folder (`config/` + `data/`).
 
-## Publishing to the website
+## The website
 
-`avn publish` builds the file behind the AVN site's news watch page (`/dashboard`):
-every article stored in the last 24 hours (`publish.hours` in `settings.yaml`), with
-reports of one story grouped by `story_cluster_id`, and without article bodies or
-images. Articles marked as false positives in the `review` table (`verified = 0`)
-are left out. It uploads the file to Cloudflare R2 as `staging/news.json`.
-
-The team reviews that file on staging.avnbd.org/dashboard and accepts the stories that
-belong in the record; avnbd.org shows only the accepted ones (stored in the site's D1
-database, see the avn repo's CLAUDE.md). The site reads the file from R2 when the page
-opens, so nothing is committed or rebuilt. The bucket and its API token come
-from the environment, never from this repo:
-
-```bash
-export R2_ACCOUNT_ID=...          # Cloudflare account id
-export R2_ACCESS_KEY_ID=...       # R2 API token with write access to the bucket
-export R2_SECRET_ACCESS_KEY=...
-export R2_BUCKET=...              # the bucket bound to the staging Pages project as NEWS
-```
-
-On the server, run it straight after the daily scrape, for example in the systemd
-service (with the four variables in an `EnvironmentFile`):
-
-```ini
-EnvironmentFile=%h/.config/avn-scraper/r2.env
-ExecStart=%h/avn_news_scraper/.venv/bin/avn run
-ExecStart=%h/avn_news_scraper/.venv/bin/avn publish
-```
-
-`avn publish --out news.json` writes the file locally without uploading, for
-checking the page on your own machine (see the avn repo's CLAUDE.md).
+The AVN site's `/dashboard`, run locally with `npm run dev`, reads this service. See the avn repo's CLAUDE.md.
 
 ## Project layout
 
@@ -210,7 +216,10 @@ src/avn_scraper/
   normalize.py     Bangla/English text normalization
   geo.py           district detection (64 districts, Bangla + English)
   dedupe.py        same-story clustering
-  storage/         Storage interface + local filesystem/SQLite backend
+  storage/         Storage interface + Postgres backend
+  migrations/      SQL for the database tables (`avn migrate`)
+  importer.py      one-off import of the old SQLite data
+  api/             FastAPI service: routers/, repository.py (SQL), stories.py, scrape.py, scheduler.py
   export.py        CSV / Excel
 deploy/            systemd, launchd, cron examples
 tests/
