@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pandas as pd
+import pytest
 
 from avn_scraper.scraper.config import Config, Source
 from avn_scraper.scraper.pipeline import RunOptions, run_pipeline
@@ -59,11 +60,12 @@ def make_config(tmp_path, keywords) -> Config:
     return Config(settings=settings, sources=[source], keywords=keywords, config_dir=tmp_path)
 
 
-def test_end_to_end_run(tmp_path, cfg, database):
+@pytest.mark.anyio
+async def test_end_to_end_run(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords)
     requests: Counter = Counter()
 
-    result = asyncio.run(run_pipeline(config, RunOptions(), transport=make_site(requests)))
+    result = await run_pipeline(config, RunOptions(), transport=make_site(requests))
     out = result.stats["outcome"]
 
     # 1: full article saved; 2: blocked (403) -> saved from its headline; 3: 503 -> retry later;
@@ -78,18 +80,18 @@ def test_end_to_end_run(tmp_path, cfg, database):
     assert {f["reason"] for f in result.stats["fetch_failed"]} == {"http_403", "http_503"}
 
     # stored: DB rows, raw HTML for the downloaded one, exports
-    storage = PostgresStorage(tmp_path)
-    rows = storage.query_df("SELECT * FROM v_matches")
+    storage = await PostgresStorage.open(tmp_path)
+    rows = await storage.query_df("SELECT * FROM v_matches")
     assert set(rows["url"]) == {SITE + "/news/1", SITE + "/news/2"}
-    stored = storage.query_df("SELECT title, raw_path FROM articles WHERE url = %s", (SITE + "/news/1",)).iloc[0]
-    storage.close()
+    stored = (await storage.query_df("SELECT title, raw_path FROM articles WHERE url = %s", (SITE + "/news/1",))).iloc[0]
+    await storage.close()
     assert stored["title"] == full["title"] and (tmp_path / stored["raw_path"]).exists()
     assert (tmp_path / "exports" / "master.xlsx").exists()
     assert len(pd.read_csv(next((tmp_path / "exports" / "daily").glob("*.csv")))) == 2
 
     # second run: only the temporarily failed article is tried again
     requests.clear()
-    second = asyncio.run(run_pipeline(config, RunOptions(), transport=make_site(requests)))
+    second = await run_pipeline(config, RunOptions(), transport=make_site(requests))
     assert requests["/news/1"] == 0 and requests["/news/2"] == 0 and requests["/news/3"] == 1
     assert second.stats["outcome"].get("saved", 0) == 0
 

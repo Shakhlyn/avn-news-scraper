@@ -41,9 +41,9 @@ def _setup_logging(verbose: bool) -> None:
     logging.getLogger("trafilatura").setLevel(logging.ERROR)
 
 
-def _storage(cfg) -> PostgresStorage:
+async def _storage(cfg) -> PostgresStorage:
     try:
-        return PostgresStorage(cfg.data_dir)
+        return await PostgresStorage.open(cfg.data_dir)
     except DatabaseUnavailable as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
@@ -158,10 +158,17 @@ def export(
 ) -> None:
     """Rebuild CSV / Excel exports from the database."""
     cfg = load_config(config)
-    storage = _storage(cfg)
     the_day = date.fromisoformat(day) if day else datetime.now(ZoneInfo(cfg.timezone)).date()
-    counts = export_all(storage, cfg.data_dir / "exports", Classifier(cfg.keywords).labels, cfg.timezone, day=the_day)
-    storage.close()
+
+    async def go():
+        storage = await _storage(cfg)
+        try:
+            return await export_all(storage, cfg.data_dir / "exports", Classifier(cfg.keywords).labels,
+                                    cfg.timezone, day=the_day)
+        finally:
+            await storage.close()
+
+    counts = asyncio.run(go())
     console.print(f"Exported to {cfg.data_dir / 'exports'}: {counts}")
 
 
@@ -171,7 +178,7 @@ def reclassify_cmd(config: Optional[Path] = ConfigOpt) -> None:
     cfg = load_config(config)
     try:
         with run_lock(cfg.data_dir / ".run.lock"):
-            counts = reclassify(cfg)
+            counts = asyncio.run(reclassify(cfg))
     except RunInProgress as exc:
         console.print(f"[yellow]A scrape is running ({exc}); try again when it finishes.[/]")
         raise typer.Exit(1)
@@ -183,19 +190,24 @@ def reclassify_cmd(config: Optional[Path] = ConfigOpt) -> None:
 def stats(config: Optional[Path] = ConfigOpt) -> None:
     """Article counts per category and per source."""
     cfg = load_config(config)
-    storage = _storage(cfg)
-    if storage.query_df("SELECT COUNT(*) AS n FROM articles")["n"][0] == 0:
-        console.print("No articles saved yet. Run `avn run` first.")
-        storage.close()
-        return
-    console.print(storage.query_df(
-        "SELECT category, COUNT(*) AS articles, MIN(published_date) AS first, MAX(published_date) AS last "
-        "FROM v_matches GROUP BY category ORDER BY articles DESC").to_string(index=False))
-    console.print()
-    console.print(storage.query_df(
-        "SELECT source_name, COUNT(DISTINCT article_id) AS articles FROM v_matches "
-        "GROUP BY source_name ORDER BY articles DESC LIMIT 30").to_string(index=False))
-    storage.close()
+
+    async def go():
+        storage = await _storage(cfg)
+        try:
+            if (await storage.query_df("SELECT COUNT(*) AS n FROM articles"))["n"][0] == 0:
+                console.print("No articles saved yet. Run `avn run` first.")
+                return
+            console.print((await storage.query_df(
+                "SELECT category, COUNT(*) AS articles, MIN(published_date) AS first, MAX(published_date) AS last "
+                "FROM v_matches GROUP BY category ORDER BY articles DESC")).to_string(index=False))
+            console.print()
+            console.print((await storage.query_df(
+                "SELECT source_name, COUNT(DISTINCT article_id) AS articles FROM v_matches "
+                "GROUP BY source_name ORDER BY articles DESC LIMIT 30")).to_string(index=False))
+        finally:
+            await storage.close()
+
+    asyncio.run(go())
 
 
 @app.command()
@@ -222,13 +234,19 @@ def serve(
 @app.command()
 def migrate() -> None:
     """Create or update the database tables."""
+
+    async def go() -> list[str]:
+        conn = await connect()
+        try:
+            return await apply_migrations(conn)
+        finally:
+            await conn.close()
+
     try:
-        conn = connect()
+        applied = asyncio.run(go())
     except DatabaseUnavailable as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
-    applied = apply_migrations(conn)
-    conn.close()
     console.print(f"Applied: {', '.join(applied)}" if applied else "Nothing to apply.")
 
 
@@ -244,9 +262,15 @@ def import_sqlite_cmd(
     if not path.exists():
         console.print(f"[red]{path} does not exist.[/]")
         raise typer.Exit(1)
-    storage = _storage(cfg)
-    counts = import_sqlite(storage, path, accepted)
-    storage.close()
+
+    async def go():
+        storage = await _storage(cfg)
+        try:
+            return await import_sqlite(storage, path, accepted)
+        finally:
+            await storage.close()
+
+    counts = asyncio.run(go())
     console.print(f"New rows: {counts}")
 
 

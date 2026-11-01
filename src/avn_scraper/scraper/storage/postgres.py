@@ -7,11 +7,11 @@ The connection comes from DATABASE_URL, set in the environment or in .env.
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import os
 import re
-import time
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from ...core.database import fetch_all, fetch_one
 from ..classify import Match
 from ..config import PROJECT_ROOT, Source
 from .base import Storage
@@ -60,78 +61,84 @@ def database_url() -> str:
     return url
 
 
-def connect(url: str | None = None, attempts: int = 3, delay: float = 2.0) -> psycopg.Connection:
+async def connect(url: str | None = None, attempts: int = 3, delay: float = 2.0) -> psycopg.AsyncConnection:
     url = url or database_url()
     for attempt in range(1, attempts + 1):
         try:
-            return psycopg.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=5)
+            return await psycopg.AsyncConnection.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=5)
         except psycopg.OperationalError as exc:
             if attempt == attempts:
                 raise DatabaseUnavailable(
                     f"Cannot reach Postgres after {attempts} tries. "
                     "Start it with ./scrape-now.sh or `docker start avn-postgres`.") from exc
-            time.sleep(delay)
+            await asyncio.sleep(delay)
     raise AssertionError("unreachable")
 
 
-def migrate(conn: psycopg.Connection) -> list[str]:
+async def migrate(conn: psycopg.AsyncConnection) -> list[str]:
     """Apply the migrations not applied yet, each in one transaction. Returns their names."""
-    conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations "
-                 "(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())")
-    done = {r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")}
+    await conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations "
+                       "(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+    done = {r["filename"] for r in await fetch_all(conn, "SELECT filename FROM schema_migrations")}
     folder = resources.files("avn_scraper") / "migrations"
     files = sorted((f for f in folder.iterdir() if f.name.endswith(".sql")), key=lambda f: f.name)
     applied = []
     for file in files:
         if file.name in done:
             continue
-        with conn.transaction():
-            conn.execute(file.read_text(encoding="utf-8").encode("utf-8"))
-            conn.execute("INSERT INTO schema_migrations(filename) VALUES (%s)", (file.name,))
+        async with conn.transaction():
+            await conn.execute(file.read_text(encoding="utf-8").encode("utf-8"))
+            await conn.execute("INSERT INTO schema_migrations(filename) VALUES (%s)", (file.name,))
         applied.append(file.name)
     return applied
 
 
 class PostgresStorage(Storage):
-    def __init__(self, data_dir: Path, conn: psycopg.Connection | None = None):
+    def __init__(self, data_dir: Path, conn: psycopg.AsyncConnection):
         self.root = data_dir
-        self.conn = conn or connect()
-        row = self.conn.execute("SELECT to_regclass('articles') IS NOT NULL AS ready").fetchone()
+        self.conn = conn
+
+    @classmethod
+    async def open(cls, data_dir: Path, conn: psycopg.AsyncConnection | None = None) -> PostgresStorage:
+        conn = conn or await connect()
+        row = await fetch_one(conn, "SELECT to_regclass('articles') IS NOT NULL AS ready")
         if not row["ready"]:
-            self.conn.close()
+            await conn.close()
             raise DatabaseUnavailable("The tables do not exist yet. Run `avn migrate` first.")
+        return cls(data_dir, conn)
 
-    def close(self) -> None:
-        self.conn.close()
+    async def close(self) -> None:
+        await self.conn.close()
 
-    def upsert_sources(self, sources: Iterable[Source]) -> None:
-        with self.conn.cursor() as cur:
-            cur.executemany(
+    async def upsert_sources(self, sources: Iterable[Source]) -> None:
+        async with self.conn.cursor() as cur:
+            await cur.executemany(
                 "INSERT INTO sources(id, name, language, type, district, homepage) VALUES (%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name, language=excluded.language, "
                 "type=excluded.type, district=excluded.district, homepage=excluded.homepage",
                 [(s.id, s.name, s.language, s.type, s.district, s.homepage) for s in sources],
             )
 
-    def known_ids(self, ids: Iterable[str]) -> set[str]:
+    async def known_ids(self, ids: Iterable[str]) -> set[str]:
         ids = list(ids)
-        rows = self.conn.execute(
+        rows = await fetch_all(
+            self.conn,
             "SELECT id FROM articles WHERE id = ANY(%(ids)s) UNION SELECT id FROM seen_urls WHERE id = ANY(%(ids)s)",
             {"ids": ids})
         return {r["id"] for r in rows}
 
-    def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
+    async def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
         now = datetime.now(timezone.utc)
-        with self.conn.transaction(), self.conn.cursor() as cur:
-            cur.executemany(
+        async with self.conn.transaction(), self.conn.cursor() as cur:
+            await cur.executemany(
                 "INSERT INTO seen_urls(id, url, status, first_seen) VALUES (%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 [(i, clean(u), clean(s), now) for i, u, s in rows],
             )
 
-    def recent_titles(self, days: int) -> list[tuple[str, str, str]]:
+    async def recent_titles(self, days: int) -> list[tuple[str, str, str]]:
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        rows = self.conn.execute(
-            "SELECT id, story_cluster_id, title FROM articles WHERE scraped_at >= %s", (since,))
+        rows = await fetch_all(
+            self.conn, "SELECT id, story_cluster_id, title FROM articles WHERE scraped_at >= %s", (since,))
         return [(r["id"], r["story_cluster_id"], r["title"]) for r in rows]
 
     def _write_raw(self, record: dict[str, Any], raw_html: str | None) -> str | None:
@@ -145,51 +152,52 @@ class PostgresStorage(Storage):
             fh.write(raw_html)
         return str(rel)
 
-    def save_article(self, record: dict[str, Any], raw_html: str | None) -> None:
+    async def save_article(self, record: dict[str, Any], raw_html: str | None) -> None:
         row = {c: clean(record.get(c)) for c in _ARTICLE_COLUMNS}
-        row["raw_path"] = self._write_raw(record, raw_html)
+        row["raw_path"] = await asyncio.to_thread(self._write_raw, record, raw_html)
         row["districts_mentioned"] = row["districts_mentioned"] or []
         row["body_missing"] = bool(row["body_missing"])
         cols = ",".join(_ARTICLE_COLUMNS)
         marks = ",".join(f"%({c})s" for c in _ARTICLE_COLUMNS)
         updates = ",".join(f"{c}=excluded.{c}" for c in _ARTICLE_COLUMNS if c != "id")
-        with self.conn.transaction():
-            self.conn.execute(f"INSERT INTO articles({cols}) VALUES ({marks}) ON CONFLICT(id) DO UPDATE SET {updates}", row)
-            self._write_categories(record["id"], record.get("categories", []))
+        async with self.conn.transaction():
+            await self.conn.execute(f"INSERT INTO articles({cols}) VALUES ({marks}) ON CONFLICT(id) DO UPDATE SET {updates}", row)
+            await self._write_categories(record["id"], record.get("categories", []))
 
-    def _write_categories(self, article_id: str, categories: list[dict[str, Any]]) -> None:
-        self.conn.execute("DELETE FROM article_categories WHERE article_id = %s", (article_id,))
-        with self.conn.cursor() as cur:
-            cur.executemany(
+    async def _write_categories(self, article_id: str, categories: list[dict[str, Any]]) -> None:
+        await self.conn.execute("DELETE FROM article_categories WHERE article_id = %s", (article_id,))
+        async with self.conn.cursor() as cur:
+            await cur.executemany(
                 "INSERT INTO article_categories(article_id, category, score, matched_terms) VALUES (%s,%s,%s,%s)",
                 [(article_id, c["category"], c["score"], Jsonb(clean(c["matched_terms"]))) for c in categories],
             )
 
-    def replace_categories(self, article_id: str, matches: list[Match]) -> None:
+    async def replace_categories(self, article_id: str, matches: list[Match]) -> None:
         categories = [{"category": m.category, "score": m.score, "matched_terms": m.matched_terms}
                       for m in matches]
-        with self.conn.transaction():
-            self._write_categories(article_id, categories)
+        async with self.conn.transaction():
+            await self._write_categories(article_id, categories)
 
-    def iter_articles(self) -> Iterator[dict[str, Any]]:
-        yield from self.conn.execute("SELECT * FROM articles").fetchall()
+    async def iter_articles(self) -> AsyncIterator[dict[str, Any]]:
+        for row in await fetch_all(self.conn, "SELECT * FROM articles"):
+            yield row
 
-    def save_run(self, run_id: str, started_at: str, finished_at: str, stats: dict[str, Any]) -> None:
-        self.conn.execute(
+    async def save_run(self, run_id: str, started_at: str, finished_at: str, stats: dict[str, Any]) -> None:
+        await self.conn.execute(
             "INSERT INTO runs(run_id, started_at, finished_at, stats) VALUES (%s,%s,%s,%s) "
             "ON CONFLICT(run_id) DO UPDATE SET started_at=excluded.started_at, "
             "finished_at=excluded.finished_at, stats=excluded.stats",
             (run_id, started_at, finished_at, Jsonb(stats)))
 
-    def last_full_run(self) -> datetime | None:
+    async def last_full_run(self) -> datetime | None:
         """When the last finished run over all outlets started."""
-        row = self.conn.execute(
-            "SELECT max(started_at) AS at FROM runs WHERE finished_at IS NOT NULL "
-            "AND stats->'only_sources' IS NULL").fetchone()
+        row = await fetch_one(self.conn, "SELECT max(started_at) AS at FROM runs WHERE finished_at IS NOT NULL "
+                                         "AND stats->'only_sources' IS NULL")
         return row["at"]
 
-    def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame:
-        with self.conn.cursor() as cur:
-            cur.execute(sql, params or None)
+    async def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame:
+        async with self.conn.cursor() as cur:
+            await cur.execute(sql, params or None)
             columns = [c.name for c in cur.description]
-            return pd.DataFrame(cur.fetchall(), columns=columns)
+            rows = await cur.fetchall()
+        return await asyncio.to_thread(pd.DataFrame, rows, columns=columns)

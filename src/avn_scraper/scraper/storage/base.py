@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
 from typing import Any
 
@@ -15,35 +15,35 @@ from ..config import Source
 
 class Storage(ABC):
     @abstractmethod
-    def upsert_sources(self, sources: Iterable[Source]) -> None: ...
+    async def upsert_sources(self, sources: Iterable[Source]) -> None: ...
 
     @abstractmethod
-    def known_ids(self, ids: Iterable[str]) -> set[str]:
+    async def known_ids(self, ids: Iterable[str]) -> set[str]:
         """Ids already stored as articles or already checked and rejected."""
 
     @abstractmethod
-    def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
+    async def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
         """Record (id, url, status) for URLs checked but not stored."""
 
     @abstractmethod
-    def recent_titles(self, days: int) -> list[tuple[str, str, str]]:
+    async def recent_titles(self, days: int) -> list[tuple[str, str, str]]:
         """[(article_id, story_cluster_id, title)] for recent articles."""
 
     @abstractmethod
-    def save_article(self, record: dict[str, Any], raw_html: str | None) -> None: ...
+    async def save_article(self, record: dict[str, Any], raw_html: str | None) -> None: ...
 
     @abstractmethod
-    def replace_categories(self, article_id: str, matches: list[Match]) -> None: ...
+    async def replace_categories(self, article_id: str, matches: list[Match]) -> None: ...
 
     @abstractmethod
-    def iter_articles(self) -> Iterator[dict[str, Any]]: ...
+    def iter_articles(self) -> AsyncIterator[dict[str, Any]]: ...
 
     @abstractmethod
-    def save_run(self, run_id: str, started_at: str, finished_at: str, stats: dict[str, Any]) -> None: ...
+    async def save_run(self, run_id: str, started_at: str, finished_at: str, stats: dict[str, Any]) -> None: ...
 
     @abstractmethod
-    def last_full_run(self) -> datetime | None:
+    async def last_full_run(self) -> datetime | None:
         """When the last finished run over all outlets started."""
 
     @abstractmethod
-    def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame: ...
+    async def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame: ...

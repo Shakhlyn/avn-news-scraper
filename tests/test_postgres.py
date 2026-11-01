@@ -6,11 +6,13 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 import pytest
 
+from avn_scraper.core.database import fetch_all, fetch_one
 from avn_scraper.scraper.config import Config
 from avn_scraper.scraper.importer import import_sqlite
 from avn_scraper.scraper.pipeline import RunOptions, _run, lookback_hours, run_pipeline
 from avn_scraper.scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate
 
+pytestmark = pytest.mark.anyio
 NOW = datetime(2026, 10, 30, 1, 0, tzinfo=timezone.utc)
 
 
@@ -25,62 +27,62 @@ def record(rid, **over):
 
 
 @pytest.fixture
-def storage(tmp_path, database):
-    s = PostgresStorage(tmp_path)
+async def storage(tmp_path, database):
+    s = await PostgresStorage.open(tmp_path)
     yield s
-    s.close()
+    await s.close()
 
 
-def test_migrate_applies_once(database):
-    conn = connect(database)
-    assert migrate(conn) == []
-    conn.close()
+async def test_migrate_applies_once(database):
+    conn = await connect(database)
+    assert await migrate(conn) == []
+    await conn.close()
 
 
-def test_saving_twice_updates_one_row_and_its_categories(storage):
-    storage.save_article(record("a"), None)
-    storage.save_article(record("a", title="new title",
-                                categories=[{"category": "border_killing", "score": 5, "matched_terms": []}]), None)
-    rows = storage.conn.execute("SELECT title, districts_mentioned FROM articles").fetchall()
+async def test_saving_twice_updates_one_row_and_its_categories(storage):
+    await storage.save_article(record("a"), None)
+    await storage.save_article(record("a", title="new title",
+                                      categories=[{"category": "border_killing", "score": 5, "matched_terms": []}]), None)
+    rows = await fetch_all(storage.conn, "SELECT title, districts_mentioned FROM articles")
     assert rows == [{"title": "new title", "districts_mentioned": ["Dhaka", "Khulna"]}]
-    cats = storage.conn.execute("SELECT category FROM article_categories").fetchall()
+    cats = await fetch_all(storage.conn, "SELECT category FROM article_categories")
     assert cats == [{"category": "border_killing"}]
 
 
-def test_seen_urls_dedupe_and_known_ids(storage):
-    storage.save_article(record("a"), None)
-    storage.mark_seen([("b", "https://x.test/b", "no_match"), ("b", "https://x.test/b", "old")])
-    assert storage.known_ids(["a", "b", "c"]) == {"a", "b"}
-    assert storage.conn.execute("SELECT status FROM seen_urls").fetchall() == [{"status": "no_match"}]
+async def test_seen_urls_dedupe_and_known_ids(storage):
+    await storage.save_article(record("a"), None)
+    await storage.mark_seen([("b", "https://x.test/b", "no_match"), ("b", "https://x.test/b", "old")])
+    assert await storage.known_ids(["a", "b", "c"]) == {"a", "b"}
+    assert await fetch_all(storage.conn, "SELECT status FROM seen_urls") == [{"status": "no_match"}]
 
 
-def test_nul_characters_are_dropped(storage):
-    storage.save_article(record("a", title="be\x00fore", body="b\x00"), None)
-    row = storage.conn.execute("SELECT title, body FROM articles").fetchone()
+async def test_nul_characters_are_dropped(storage):
+    await storage.save_article(record("a", title="be\x00fore", body="b\x00"), None)
+    row = await fetch_one(storage.conn, "SELECT title, body FROM articles")
     assert row == {"title": "before", "body": "b"}
 
 
-def test_a_failed_article_leaves_nothing_behind(storage):
+async def test_a_failed_article_leaves_nothing_behind(storage):
     bad = record("a", categories=[{"category": None, "score": 1, "matched_terms": []}])
     with pytest.raises(psycopg.Error):
-        storage.save_article(bad, None)
-    assert storage.conn.execute("SELECT count(*) AS n FROM articles").fetchone()["n"] == 0
+        await storage.save_article(bad, None)
+    assert (await fetch_one(storage.conn, "SELECT count(*) AS n FROM articles"))["n"] == 0
 
 
-def test_a_bad_row_is_counted_and_the_run_goes_on(tmp_path, database, monkeypatch):
+async def test_a_bad_row_is_counted_and_the_run_goes_on(tmp_path, database, monkeypatch):
     calls = []
     real = PostgresStorage.save_article
 
-    def save(self, rec, raw):
+    async def save(self, rec, raw):
         calls.append(rec["id"])
         if len(calls) == 1:
             raise psycopg.DataError("bad value")
-        real(self, rec, raw)
+        await real(self, rec, raw)
 
     monkeypatch.setattr(PostgresStorage, "save_article", save)
     import test_pipeline as tp
     config = tp.make_config(tmp_path, load_keywords())
-    result = asyncio.run(run_pipeline(config, RunOptions(), transport=tp.make_site(tp.Counter())))
+    result = await run_pipeline(config, RunOptions(), transport=tp.make_site(tp.Counter()))
     assert result.stats["outcome"]["db_failed"] == 1 and result.stats["outcome"]["saved"] == 1
 
 
@@ -89,42 +91,46 @@ def load_keywords():
     return load_config().keywords
 
 
-def test_a_lost_connection_stops_the_run(tmp_path, database, monkeypatch):
-    def save(self, rec, raw):
+async def test_a_lost_connection_stops_the_run(tmp_path, database, monkeypatch):
+    async def save(self, rec, raw):
         raise psycopg.OperationalError("server closed the connection")
 
     monkeypatch.setattr(PostgresStorage, "save_article", save)
     import test_pipeline as tp
     config = tp.make_config(tmp_path, load_keywords())
     with pytest.raises(psycopg.OperationalError):
-        asyncio.run(run_pipeline(config, RunOptions(), transport=tp.make_site(tp.Counter())))
+        await run_pipeline(config, RunOptions(), transport=tp.make_site(tp.Counter()))
     assert not (tmp_path / "cache" / "listing_seen.json").exists()
 
 
 def test_database_down_fails_before_any_web_request(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
-    monkeypatch.setattr("avn_scraper.scraper.storage.postgres.time.sleep", lambda _: None)
+
+    async def no_wait(_):
+        pass
+
+    monkeypatch.setattr("avn_scraper.scraper.storage.postgres.asyncio.sleep", no_wait)
     config = Config(settings={}, sources=[], keywords={}, config_dir=tmp_path)
     with pytest.raises(DatabaseUnavailable, match="Cannot reach Postgres after 3 tries"):
         asyncio.run(run_pipeline(config, RunOptions(), transport=None))
 
 
-def test_missing_tables_say_to_migrate(tmp_path, database):
-    conn = connect(database)
-    conn.execute("DROP TABLE articles CASCADE")
+async def test_missing_tables_say_to_migrate(tmp_path, database):
+    conn = await connect(database)
+    await conn.execute("DROP TABLE articles CASCADE")
     with pytest.raises(DatabaseUnavailable, match="avn migrate"):
-        PostgresStorage(tmp_path, conn)
+        await PostgresStorage.open(tmp_path, conn)
 
 
-def test_dry_run_writes_nothing(tmp_path, cfg, database):
+async def test_dry_run_writes_nothing(tmp_path, cfg, database):
     import test_pipeline as tp
     config = tp.make_config(tmp_path, cfg.keywords)
-    result = asyncio.run(run_pipeline(config, RunOptions(dry_run=True), transport=tp.make_site(tp.Counter())))
+    result = await run_pipeline(config, RunOptions(dry_run=True), transport=tp.make_site(tp.Counter()))
     assert result.saved
-    conn = connect(database)
+    conn = await connect(database)
     for table in ("sources", "articles", "seen_urls", "runs"):
-        assert conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"] == 0
-    conn.close()
+        assert (await fetch_one(conn, f"SELECT count(*) AS n FROM {table}"))["n"] == 0
+    await conn.close()
 
 
 @pytest.mark.parametrize("gap,expected", [(None, 24), (timedelta(hours=3), 24), (timedelta(days=3), 72)])
@@ -132,20 +138,20 @@ def test_lookback_reaches_the_last_run_and_never_less_than_the_window(gap, expec
     assert lookback_hours(24, NOW - gap if gap else None, NOW) == expected
 
 
-def test_last_full_run_skips_partial_runs(storage):
-    assert storage.last_full_run() is None
-    storage.save_run("full", NOW.isoformat(), NOW.isoformat(), {})
+async def test_last_full_run_skips_partial_runs(storage):
+    assert await storage.last_full_run() is None
+    await storage.save_run("full", NOW.isoformat(), NOW.isoformat(), {})
     later = (NOW + timedelta(hours=5)).isoformat()
-    storage.save_run("part", later, later, {"only_sources": ["x"]})
-    assert storage.last_full_run() == NOW
+    await storage.save_run("part", later, later, {"only_sources": ["x"]})
+    assert await storage.last_full_run() == NOW
 
 
-def test_since_last_run_widens_the_cutoff(tmp_path, cfg, storage):
+async def test_since_last_run_widens_the_cutoff(tmp_path, cfg, storage):
     import test_pipeline as tp
     start = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-    storage.save_run("old", start, start, {})
+    await storage.save_run("old", start, start, {})
     config = tp.make_config(tmp_path, cfg.keywords)
-    result = asyncio.run(_run(config, RunOptions(since_last_run=True), storage, tp.make_site(tp.Counter())))
+    result = await _run(config, RunOptions(since_last_run=True), storage, tp.make_site(tp.Counter()))
     cutoff = datetime.fromisoformat(result.stats["cutoff"])
     assert timedelta(hours=71) < datetime.now(timezone.utc) - cutoff < timedelta(hours=73)
 
@@ -170,15 +176,15 @@ def make_sqlite(path):
     db.close()
 
 
-def test_import_copies_everything_and_can_run_again(tmp_path, storage):
+async def test_import_copies_everything_and_can_run_again(tmp_path, storage):
     path = tmp_path / "news.sqlite"
     make_sqlite(path)
     accepted = tmp_path / "accepted.json"
     accepted.write_text(json.dumps([{"id": "s", "story": {"id": "s"}, "at": "2026-10-29T08:30:48.800Z", "by": ""}]))
 
-    first = import_sqlite(storage, path, accepted)
+    first = await import_sqlite(storage, path, accepted)
     assert first == {"sources": 1, "articles": 1, "article_categories": 1, "review": 0,
                      "seen_urls": 1, "runs": 1, "accepted": 1}
-    row = storage.conn.execute("SELECT published_at, districts_mentioned, body_missing FROM articles").fetchone()
+    row = await fetch_one(storage.conn, "SELECT published_at, districts_mentioned, body_missing FROM articles")
     assert row == {"published_at": None, "districts_mentioned": ["Dhaka", "Khulna"], "body_missing": True}
-    assert set(import_sqlite(storage, path, accepted).values()) == {0}
+    assert set((await import_sqlite(storage, path, accepted)).values()) == {0}

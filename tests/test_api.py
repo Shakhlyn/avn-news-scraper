@@ -1,3 +1,4 @@
+import asyncio
 import threading
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
@@ -55,11 +56,31 @@ def readonly(config, database, monkeypatch):
         yield c
 
 
+class Seed:
+    """Puts rows in the database from these plain tests, each call on its own connection."""
+
+    def __init__(self, root):
+        self.root = root
+
+    def _with_storage(self, use):
+        async def go():
+            s = await PostgresStorage.open(self.root)
+            try:
+                return await use(s)
+            finally:
+                await s.close()
+        return asyncio.run(go())
+
+    def save_article(self, record, raw):
+        self._with_storage(lambda s: s.save_article(record, raw))
+
+    def execute(self, sql, params=None):
+        self._with_storage(lambda s: s.conn.execute(sql, params))
+
+
 @pytest.fixture
 def storage(tmp_path, database):
-    s = PostgresStorage(tmp_path)
-    yield s
-    s.close()
+    return Seed(tmp_path)
 
 
 def article(rid, **over):
@@ -128,7 +149,7 @@ def test_news_lists_filters_and_pages(client, storage):
 def test_false_positives_are_left_out(client, storage):
     storage.save_article(article("keep"), None)
     storage.save_article(article("wrong"), None)
-    storage.conn.execute("INSERT INTO review(article_id, verified) VALUES ('wrong', 0)")
+    storage.execute("INSERT INTO review(article_id, verified) VALUES ('wrong', 0)")
     assert [s["id"] for s in client.get("/api/v1/news").json()["stories"]] == ["keep"]
 
 
@@ -165,7 +186,7 @@ def test_writes_from_another_site_are_refused(client, storage, headers):
 def test_with_reviewing_off_it_is_read_only_and_hides_who(readonly, storage):
     storage.save_article(article("a"), None)
     story = '{"id": "a", "categories": [], "district": "", "score": 1, "reports": []}'
-    storage.conn.execute("INSERT INTO accepted VALUES ('a', %s, now(), 'someone')", (story,))
+    storage.execute("INSERT INTO accepted VALUES ('a', %s, now(), 'someone')", (story,))
     assert readonly.get("/api/v1/news").status_code == 404
     assert readonly.post("/api/v1/accepted", json={"id": "a"}, headers=ORIGIN).status_code == 403
     assert readonly.post("/api/v1/scrape", headers=ORIGIN).status_code == 403

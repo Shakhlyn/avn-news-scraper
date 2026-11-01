@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 
@@ -8,6 +9,11 @@ from dotenv import load_dotenv
 from avn_scraper.scraper.classify import Classifier
 from avn_scraper.scraper.config import PROJECT_ROOT, load_config
 from avn_scraper.scraper.storage import connect, migrate
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
 @pytest.fixture(scope="session")
@@ -33,9 +39,13 @@ def database(monkeypatch):
     admin.execute(f"CREATE SCHEMA {schema}")
     test_url = f"{url}{'&' if '?' in url else '?'}options=-csearch_path%3D{schema}"
     monkeypatch.setenv("DATABASE_URL", test_url)
-    conn = connect(test_url)
-    migrate(conn)
-    conn.close()
+
+    async def prepare():
+        conn = await connect(test_url)
+        await migrate(conn)
+        await conn.close()
+
+    asyncio.run(prepare())
     yield test_url
     admin.execute(f"DROP SCHEMA {schema} CASCADE")
     admin.close()

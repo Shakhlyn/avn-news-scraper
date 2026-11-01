@@ -4,6 +4,7 @@ again: rows already in Postgres are left as they are. SQLite is only read."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -18,19 +19,20 @@ def _rows(db: sqlite3.Connection, table: str) -> list[dict]:
     return [{k: clean(v) for k, v in dict(r).items()} for r in db.execute(f"SELECT * FROM {table}")]
 
 
-def _insert(storage: PostgresStorage, table: str, rows: list[dict]) -> int:
+async def _insert(storage: PostgresStorage, table: str, rows: list[dict]) -> int:
     """Insert `rows` and return how many were new."""
     if not rows:
         return 0
     cols = list(rows[0])
     sql = (f"INSERT INTO {table}({','.join(cols)}) VALUES ({','.join(f'%({c})s' for c in cols)}) "
            "ON CONFLICT DO NOTHING")
-    with storage.conn.cursor() as cur:
-        cur.executemany(sql, rows)
+    async with storage.conn.cursor() as cur:
+        await cur.executemany(sql, rows)
         return cur.rowcount
 
 
-def import_sqlite(storage: PostgresStorage, sqlite_path: Path, accepted_path: Path | None = None) -> dict[str, int]:
+def _read_old_data(sqlite_path: Path, accepted_path: Path | None) -> dict[str, list[dict]]:
+    """The rows of each table, in the order they can be inserted."""
     db = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
 
@@ -57,13 +59,11 @@ def import_sqlite(storage: PostgresStorage, sqlite_path: Path, accepted_path: Pa
         accepted = [{"id": a["id"], "story": Jsonb(a["story"]), "accepted_at": a["at"], "accepted_by": a.get("by") or ""}
                     for a in json.loads(accepted_path.read_text(encoding="utf-8"))]
 
-    with storage.conn.transaction():
-        return {
-            "sources": _insert(storage, "sources", sources),
-            "articles": _insert(storage, "articles", articles),
-            "article_categories": _insert(storage, "article_categories", categories),
-            "review": _insert(storage, "review", review),
-            "seen_urls": _insert(storage, "seen_urls", seen),
-            "runs": _insert(storage, "runs", runs),
-            "accepted": _insert(storage, "accepted", accepted),
-        }
+    return {"sources": sources, "articles": articles, "article_categories": categories, "review": review,
+            "seen_urls": seen, "runs": runs, "accepted": accepted}
+
+
+async def import_sqlite(storage: PostgresStorage, sqlite_path: Path, accepted_path: Path | None = None) -> dict[str, int]:
+    tables = await asyncio.to_thread(_read_old_data, sqlite_path, accepted_path)
+    async with storage.conn.transaction():
+        return {table: await _insert(storage, table, rows) for table, rows in tables.items()}

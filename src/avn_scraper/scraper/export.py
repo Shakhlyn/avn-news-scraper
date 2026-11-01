@@ -9,6 +9,7 @@ CSV files are UTF-8 with BOM so Excel shows Bangla correctly.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -58,9 +59,15 @@ def _write_csv(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False, encoding="utf-8-sig")
 
 
-def export_all(storage: Storage, exports_dir: Path, labels: dict[str, str], tz: str,
-               day: date | None = None) -> dict[str, int]:
-    df = storage.query_df(_MATCHES_SQL).map(_neutralize)
+async def export_all(storage: Storage, exports_dir: Path, labels: dict[str, str], tz: str,
+                     day: date | None = None) -> dict[str, int]:
+    df = await storage.query_df(_MATCHES_SQL)
+    return await asyncio.to_thread(_write_exports, df, exports_dir, labels, tz, day)
+
+
+def _write_exports(df: pd.DataFrame, exports_dir: Path, labels: dict[str, str], tz: str,
+                   day: date | None) -> dict[str, int]:
+    df = df.map(_neutralize)
     counts = {"rows": len(df)}
     if df.empty:
         return counts

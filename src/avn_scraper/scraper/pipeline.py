@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -126,11 +127,11 @@ def lookback_hours(window: float, last_run: datetime | None, now: datetime) -> f
 async def run_pipeline(cfg: Config, opts: RunOptions,
                        transport: httpx.AsyncBaseTransport | None = None) -> RunResult:
     """Fails before any web request if the database cannot be used."""
-    storage = PostgresStorage(cfg.data_dir)
+    storage = await PostgresStorage.open(cfg.data_dir)
     try:
         return await _run(cfg, opts, storage, transport)
     finally:
-        storage.close()
+        await storage.close()
 
 
 async def _run(cfg: Config, opts: RunOptions, storage: Storage,
@@ -141,11 +142,11 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     run_id = started.strftime("%Y%m%dT%H%M%SZ")
     hours = opts.since_hours or float(s.get("window_hours", 24))
     if opts.since_last_run:
-        hours = lookback_hours(hours, storage.last_full_run(), started)
+        hours = lookback_hours(hours, await storage.last_full_run(), started)
     cutoff = started - timedelta(hours=hours)
     classifier = Classifier(cfg.keywords)
     if not opts.dry_run:
-        storage.upsert_sources(cfg.sources)
+        await storage.upsert_sources(cfg.sources)
     stats: dict[str, Any] = {"run_id": run_id, "started_at": started.isoformat(timespec="seconds"),
                              "cutoff": cutoff.isoformat(timespec="seconds"), "dry_run": opts.dry_run}
     if opts.only_sources:  # a partial run must not count as the last full run
@@ -156,14 +157,15 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     by_id = {src.id: src for src in cfg.sources}
     catchall_cfg = s.get("search_catchall") or {}
     use_catchall = catchall_cfg.get("enabled", False) if opts.catchall is None else opts.catchall
-    cache = EndpointCache(cfg.data_dir / "cache" / "endpoints.json", int(s.get("endpoint_cache_days", 7)))
-    memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")
+    cache = await asyncio.to_thread(EndpointCache, cfg.data_dir / "cache" / "endpoints.json",
+                                    int(s.get("endpoint_cache_days", 7)))
+    memory = await asyncio.to_thread(ListingMemory, cfg.data_dir / "cache" / "listing_seen.json")
 
     async with Fetcher(s.get("http") or {}, transport=transport) as fetcher:
         # 1. discover
         results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)
                                          for src in sources))
-        cache.save()
+        await asyncio.to_thread(cache.save)
         stats["sources"] = {r.source_id: {"ok": r.ok, "counts": r.counts, "endpoints": r.endpoints, "error": r.error}
                             for r in results}
         candidates = [c for r in results for c in r.candidates]
@@ -179,7 +181,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         merged = _merge(candidates)
         stats["candidates"] = len(merged)
         fresh = {k: c for k, c in merged.items() if not c.published_at or c.published_at >= cutoff}
-        known = storage.known_ids(fresh.keys())
+        known = await storage.known_ids(fresh.keys())
         new = {k: c for k, c in fresh.items() if k not in known}
         stats["new_candidates"] = len(new)
         if opts.prefilter:
@@ -200,7 +202,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         failures = dict(fetcher.failures)
 
     # 4. classify, cluster, store
-    recent = storage.recent_titles(days=3)
+    recent = await storage.recent_titles(days=3)
     saved: list[dict[str, Any]] = []
     seen_rows: list[tuple[str, str, str]] = []
     outcome: Counter[str] = Counter()
@@ -250,7 +252,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         aid = article_id(canonical)
         if aid != cid:
             seen_rows.append((cid, c.url, f"alias:{aid}"))
-            if aid in storage.known_ids([aid]) or any(r["id"] == aid for r in saved):
+            if aid in await storage.known_ids([aid]) or any(r["id"] == aid for r in saved):
                 outcome["duplicate"] += 1
                 continue
 
@@ -284,7 +286,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         }
         if not opts.dry_run:
             try:
-                storage.save_article(record, html)
+                await storage.save_article(record, html)
             except psycopg.OperationalError:
                 raise  # the database went away: stop, the next run covers these articles
             except psycopg.Error as exc:
@@ -298,40 +300,44 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         by_category.update(m.category for m in matches)
 
     if not opts.dry_run:
-        storage.mark_seen(seen_rows)
+        await storage.mark_seen(seen_rows)
         # Saved only once the articles are stored: the next run's paging stops at these links.
-        memory.save()
+        await asyncio.to_thread(memory.save)
     stats["outcome"] = dict(outcome)
     stats["fetch_failed"] = failed[:100]
     stats["by_category"] = dict(by_category)
 
     # 5. export + run log
     if not opts.dry_run and opts.export:
-        stats["export"] = export_all(storage, cfg.data_dir / "exports", classifier.labels, cfg.timezone,
-                                     day=started.astimezone(tz).date())
+        stats["export"] = await export_all(storage, cfg.data_dir / "exports", classifier.labels, cfg.timezone,
+                                           day=started.astimezone(tz).date())
     finished = datetime.now(timezone.utc)
     stats["finished_at"] = finished.isoformat(timespec="seconds")
     stats["duration_seconds"] = round((finished - started).total_seconds(), 1)
     if not opts.dry_run:
-        storage.save_run(run_id, stats["started_at"], stats["finished_at"], stats)
-        log_dir = cfg.data_dir / "logs" / "runs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        local = started.astimezone(tz)
-        (log_dir / f"{local:%Y-%m-%d_%H%M%S}.json").write_text(
-            json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
+        await storage.save_run(run_id, stats["started_at"], stats["finished_at"], stats)
+        log_name = f"{started.astimezone(tz):%Y-%m-%d_%H%M%S}.json"
+        await asyncio.to_thread(_write_run_log, cfg.data_dir / "logs" / "runs" / log_name, stats)
     return RunResult(run_id, stats, saved)
 
 
-def reclassify(cfg: Config) -> Counter[str]:
+def _write_run_log(path: Path, stats: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+async def reclassify(cfg: Config) -> Counter[str]:
     """Re-apply keywords.yaml to every stored article (no network)."""
     classifier = Classifier(cfg.keywords)
-    storage = PostgresStorage(cfg.data_dir)
+    storage = await PostgresStorage.open(cfg.data_dir)
     counts: Counter[str] = Counter()
-    for art in list(storage.iter_articles()):
-        matches = classifier.classify(art["title"] or "", art["body"] or "", art["summary"] or "")
-        storage.replace_categories(art["id"], matches)
-        counts["articles"] += 1
-        counts["unmatched_now" if not matches else "matched"] += 1
-        counts.update(f"cat:{m.category}" for m in matches)
-    storage.close()
+    try:
+        async for art in storage.iter_articles():
+            matches = classifier.classify(art["title"] or "", art["body"] or "", art["summary"] or "")
+            await storage.replace_categories(art["id"], matches)
+            counts["articles"] += 1
+            counts["unmatched_now" if not matches else "matched"] += 1
+            counts.update(f"cat:{m.category}" for m in matches)
+    finally:
+        await storage.close()
     return counts
