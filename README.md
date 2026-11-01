@@ -18,7 +18,7 @@ Each matching article is saved with its full text, original HTML and metadata. I
 ## Setup
 
 ```bash
-uv venv --python 3.12 .venv          # or: python3.12 -m venv .venv
+uv venv --python 3.14.5 .venv        # or: python3.14 -m venv .venv
 uv pip install -e ".[dev]"           # or: .venv/bin/pip install -e ".[dev]"
 cp .env.example .env                 # then fill in the database password
 .venv/bin/avn migrate                # create the tables
@@ -184,8 +184,11 @@ The same image also runs unchanged on GitHub Actions (scheduled workflow) or any
 
 ```bash
 docker build -t avn-news-scraper .
-docker run --rm -v "$PWD/data:/app/data" avn-news-scraper run
+docker run --rm --network avnnet -v "$PWD/data:/app/data" \
+  -e DATABASE_URL=postgresql://avn:<password>@db:5432/avndb avn-news-scraper run
 ```
+
+The image has no `.env`, so pass `DATABASE_URL`. On `avnnet` the host is `db` and the port is 5432. Start the `avn_postgres_db/pg-stack` stack first.
 
 Set `AVN_HOME` to point the tool at a different project folder (`config/` + `data/`).
 
