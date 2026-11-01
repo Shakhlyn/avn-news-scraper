@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field, computed_field
+from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ..scraper.config import PROJECT_ROOT
@@ -13,8 +13,8 @@ class Settings(BaseSettings):
 
     database_url: str
     avn_review: str = ""
-    # Sites whose pages may call the API from the browser: the AVN dev server.
-    cors_origins: list[str] = Field(default=["http://localhost:4321", "http://127.0.0.1:4321"])
+    # Sites whose pages may call the API from the browser. No default: each deployment names its own.
+    cors_origins: list[str]
 
     @computed_field
     @property

@@ -125,7 +125,7 @@ ON CONFLICT (article_id) DO UPDATE SET verified = excluded.verified, notes = exc
 | `GET /api/v1/runs` | Recent runs |
 | `GET /api/v1/health` | Service and database check |
 
-CORS allows the origins in `CORS_ORIGINS`, by default the AVN dev server. Rate limits are per client address: 120 requests a minute by default, 30 for accepting and withdrawing, 5 for starting a scrape (`core/limiter.py`). Over the limit the answer is 429.
+CORS allows the origins in `CORS_ORIGINS`, a JSON list set in `.env`; the service will not start without it. Rate limits are per client address: 120 requests a minute by default, 30 for accepting and withdrawing, 5 for starting a scrape (`core/limiter.py`). Over the limit the answer is 429.
 
 The interactive docs are at `http://127.0.0.1:8100/docs`. The service answers on localhost only, and writes must carry a same-site `Origin`.
 
