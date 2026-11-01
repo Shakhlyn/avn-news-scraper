@@ -12,3 +12,14 @@ the scraping engine is `scraper/`.
   that file whenever a change alters them.
 - Tests: `.venv/bin/python -m pytest -q`. Check real sites with `.venv/bin/avn check-sources -v`
   and `.venv/bin/avn run --dry-run`. Never run a real `avn run` just to test; it writes data.
+
+## Tickets (`dev-task/`, gitignored)
+
+Every task gets a dated ticket. Do not read `dev-task/` at session start: read it only when told to or when
+assigned a task, and then open the epic and ticket whose names match, not all of them.
+
+- Layout: `dev-task/epics/<epic-name>/` holds `epic-<epic-name>.md`, `ticket-<number>-<name>.md` and `task-completion.md`.
+- A ticket that fits no epic (rare) goes in `dev-task/epics/no-epic/`.
+- Ticket numbers run across the repo. Name epics and tickets so the name alone says what is inside.
+- `task-completion.md` tracks each ticket as `done`, `partial` or `pending`, with what is left and why. Keep it current.
+- Keep epics and tickets short: quick to read, few tokens.

@@ -201,3 +201,6 @@ $RECYCLE.BIN/
 *.rej
 tmp/
 temp/
+
+# Local task tracking: epics and tickets
+dev-task/
