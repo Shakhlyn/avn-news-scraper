@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
-# The service answers only to its own name. A page elsewhere can point a domain of its
-# own at this machine (DNS rebinding); its requests then carry that domain as Host.
-LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]", "testserver"]
-
 
 async def require_reviewing(request: Request) -> None:
     if not request.app.state.settings.reviewing:

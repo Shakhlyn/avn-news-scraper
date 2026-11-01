@@ -16,6 +16,12 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def test_client_host(monkeypatch):
+    """TestClient sends Host: testserver, which no real .env should allow."""
+    monkeypatch.setenv("ALLOWED_HOSTS", '["testserver"]')
+
+
 @pytest.fixture(scope="session")
 def cfg():
     return load_config()

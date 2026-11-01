@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from avn_scraper.core.limiter import limiter
 from avn_scraper.main import create_app
@@ -205,6 +206,19 @@ def test_database_down_is_a_plain_503(config, monkeypatch):
     with TestClient(app) as c:
         response = c.get("/api/v1/health")
     assert response.status_code == 503 and "error" in response.json()
+
+
+def test_the_hosts_come_from_the_environment(config, database, monkeypatch):
+    monkeypatch.setenv("ALLOWED_HOSTS", '["news.example.org"]')
+    with client_for(config) as c:
+        assert c.get("/api/v1/health", headers={"host": "news.example.org"}).status_code == 200
+        assert c.get("/api/v1/health").status_code == 400
+
+
+def test_a_wildcard_host_is_refused(config, monkeypatch):
+    monkeypatch.setenv("ALLOWED_HOSTS", '["*"]')
+    with pytest.raises(ValidationError):
+        create_app(config, ScrapeManager(config, idle_run), schedule=False)
 
 
 def test_the_pool_size_comes_from_the_environment(config, database, monkeypatch):

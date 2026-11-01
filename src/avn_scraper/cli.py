@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 import typer
 from pydantic import ValidationError
+from pydantic_settings import SettingsError
 from rich.console import Console
 from rich.table import Table
 
@@ -225,8 +226,12 @@ def serve(
     _setup_logging(verbose)
     try:
         api = create_app(schedule=not no_schedule)
-    except ValidationError:
-        console.print("[red]DATABASE_URL is not set. Copy .env.example to .env and fill it in.[/]")
+    except ValidationError as exc:
+        names = ", ".join(sorted({str(e["loc"][0]).upper() for e in exc.errors()}))
+        console.print(f"[red]Missing or invalid in .env: {names}. See .env.example.[/]")
+        raise typer.Exit(1)
+    except SettingsError as exc:
+        console.print(f"[red]{exc}. See .env.example.[/]")
         raise typer.Exit(1)
     uvicorn.run(api, host=host, port=port, log_level="info")
 

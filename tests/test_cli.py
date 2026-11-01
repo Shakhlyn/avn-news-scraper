@@ -36,3 +36,10 @@ def test_a_missing_database_is_a_plain_message(monkeypatch):
     monkeypatch.setattr("avn_scraper.scraper.storage.postgres.asyncio.sleep", no_wait)
     result = runner.invoke(app, ["stats"])
     assert result.exit_code == 1 and "Cannot reach Postgres" in result.output
+
+
+@pytest.mark.parametrize("value", ['["*"]', "avnbd.org"])
+def test_serve_names_a_bad_setting(monkeypatch, value):
+    monkeypatch.setenv("ALLOWED_HOSTS", value)
+    result = runner.invoke(app, ["serve"])
+    assert result.exit_code == 1 and "allowed_hosts" in result.output.lower()

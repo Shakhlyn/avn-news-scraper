@@ -19,7 +19,6 @@ from .core.config import Settings
 from .core.database import last_full_run, make_pool
 from .core.errors import add_error_handlers
 from .core.limiter import limiter
-from .core.security import LOCAL_HOSTS
 from .scraper.config import Config, load_config
 from .services.scheduler import Scheduler
 from .services.scrape_manager import ScrapeManager
@@ -55,7 +54,7 @@ def create_app(cfg: Config | None = None, scrapes: ScrapeManager | None = None, 
 
     # The last one added runs first.
     app.add_middleware(SlowAPIMiddleware)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
     @app.middleware("http")
     async def response_headers(request: Request, call_next):
