@@ -85,6 +85,10 @@ _PERMANENT_FAILURES = {"http_401", "http_403", "http_404", "http_410", "http_451
                        "extract_error", "adapter_error"}
 
 
+def _keyword_hits(classifier: Classifier, candidates: dict[str, Candidate]) -> dict[str, Candidate]:
+    return {k: c for k, c in candidates.items() if classifier.prefilter(c.title, c.summary, slug_text(c.url))}
+
+
 async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | None, Extracted | None]:
     """Download and extract one article. On failure the reason is in fetcher.failures[c.url]."""
     adapter = find_adapter(c.url)
@@ -95,7 +99,7 @@ async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | N
             fetcher.failures[c.url] = fetcher.failures.get(api_url, "network_error")
             return c, None, None
         try:
-            return c, resp.text, site.parse(resp.content)
+            return c, resp.text, await asyncio.to_thread(site.parse, resp.content)
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             log.warning("%s adapter could not parse %s: %r", site.name, api_url, exc)
             fetcher.failures[c.url] = "adapter_error"
@@ -144,7 +148,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     if opts.since_last_run:
         hours = lookback_hours(hours, await storage.last_full_run(), started)
     cutoff = started - timedelta(hours=hours)
-    classifier = Classifier(cfg.keywords)
+    classifier = await asyncio.to_thread(Classifier, cfg.keywords)
     if not opts.dry_run:
         await storage.upsert_sources(cfg.sources)
     stats: dict[str, Any] = {"run_id": run_id, "started_at": started.isoformat(timespec="seconds"),
@@ -185,7 +189,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         new = {k: c for k, c in fresh.items() if k not in known}
         stats["new_candidates"] = len(new)
         if opts.prefilter:
-            new = {k: c for k, c in new.items() if classifier.prefilter(c.title, c.summary, slug_text(c.url))}
+            new = await asyncio.to_thread(_keyword_hits, classifier, new)
         cap = int(s.get("max_articles_per_source", 80))
         per_source: Counter[str] = Counter()
         selected: list[Candidate] = []
@@ -239,7 +243,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
 
         title = ex.title or c.title
         summary = ex.summary or c.summary
-        matches = classifier.classify(title, ex.body, summary)
+        matches = await asyncio.to_thread(classifier.classify, title, ex.body, summary)
         if not matches:
             if fetch_ok or permanent:
                 outcome["no_match"] += 1
@@ -257,8 +261,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
                 continue
 
         src = by_id.get(c.source_id)
-        district, mentioned = detect_districts(title, ex.body or summary)
-        cluster = find_cluster(title, recent) or aid
+        district, mentioned = await asyncio.to_thread(detect_districts, title, ex.body or summary)
+        cluster = await asyncio.to_thread(find_cluster, title, recent) or aid
         recent.append((aid, cluster, title))
         record = {
             "id": aid,

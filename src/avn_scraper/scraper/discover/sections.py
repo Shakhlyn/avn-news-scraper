@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -211,8 +212,8 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
     max_pages = int(settings.get("max_pages", 20))
     candidates = list(source.sections)
     if settings.get("auto_discover", True) and source.auto_sections and homepage_html:
-        candidates += find_print_links(homepage_html, source.homepage, source.homepage)
-        candidates += find_section_links(homepage_html, source.homepage, source.homepage, limit)
+        candidates += await asyncio.to_thread(find_print_links, homepage_html, source.homepage, source.homepage)
+        candidates += await asyncio.to_thread(find_section_links, homepage_html, source.homepage, source.homepage, limit)
     sections, keys = [], set()
     for u in candidates:
         if canonicalize(u) not in keys:
@@ -239,7 +240,7 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
             old = memory.seen_before(source.id, ids) if memory is not None else 0
             if memory is not None:
                 memory.record(source.id, ids)
-            if old * 2 >= len(ids) or page_is_past_window(html, cutoff, [c.url for c in items]):
+            if old * 2 >= len(ids) or await asyncio.to_thread(page_is_past_window, html, cutoff, [c.url for c in items]):
                 break
-            url = find_next_page(html, url)
+            url = await asyncio.to_thread(find_next_page, html, url)
     return out, sections, pages

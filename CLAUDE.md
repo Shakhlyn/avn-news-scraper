@@ -7,6 +7,11 @@ and review API that the AVN site's `/dashboard` reads. FastAPI lives in this rep
 Routes go in `api/v1/endpoints/`, models in `schemas/`, SQL in `repositories/`, logic in `services/`;
 the scraping engine is `scraper/`.
 
+The whole service is async on one event loop, and a scrape shares that loop with the API. Anything that
+waits uses async (`psycopg` `AsyncConnection`, `httpx`). Blocking or CPU-heavy work (parsing, keyword matching,
+file writes, pandas) goes through `asyncio.to_thread`, or it freezes the API during a scrape.
+The functions it calls stay plain `def`. No threads of our own, and no sync `psycopg`.
+
 - The scraping rules (24-hour window, which tabs / print editions are read, pagination
   stops, what is skipped and kept) are in `docs/scraping-rules.md`. Follow them, and update
   that file whenever a change alters them.

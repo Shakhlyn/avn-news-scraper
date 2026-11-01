@@ -6,8 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socket
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -37,17 +36,17 @@ def is_due(now: datetime, daily_at: time, tz: ZoneInfo, last_run: datetime | Non
     return last_attempt is None or now - last_attempt >= RETRY_AFTER
 
 
-def network_up() -> bool:
+async def network_up() -> bool:
     try:
-        socket.getaddrinfo(PROBE_HOST, 443)
+        await asyncio.get_running_loop().getaddrinfo(PROBE_HOST, 443)
         return True
     except OSError:
         return False
 
 
 class Scheduler:
-    def __init__(self, scrapes: ScrapeManager, last_run: Callable[[], datetime | None],
-                 daily_at: time, tz: ZoneInfo, online: Callable[[], bool] = network_up):
+    def __init__(self, scrapes: ScrapeManager, last_run: Callable[[], Awaitable[datetime | None]],
+                 daily_at: time, tz: ZoneInfo, online: Callable[[], Awaitable[bool]] = network_up):
         self.scrapes = scrapes
         self.last_run = last_run
         self.daily_at = daily_at
@@ -55,17 +54,17 @@ class Scheduler:
         self.online = online
         self.last_attempt: datetime | None = None
 
-    def tick(self, now: datetime | None = None) -> bool:
+    async def tick(self, now: datetime | None = None) -> bool:
         """Start the scrape if one is due. True if it started."""
         now = now or datetime.now(timezone.utc)
         if self.scrapes.running:
             return False
         try:
-            last = self.last_run()
+            last = await self.last_run()
         except Exception as exc:  # the database is still starting: try again next tick
             log.warning("schedule check failed: %s", exc)
             return False
-        if not is_due(now, self.daily_at, self.tz, last, self.last_attempt) or not self.online():
+        if not is_due(now, self.daily_at, self.tz, last, self.last_attempt) or not await self.online():
             return False
         if not self.scrapes.start("schedule"):
             return False
@@ -75,5 +74,5 @@ class Scheduler:
 
     async def loop(self) -> None:
         while True:
-            await asyncio.to_thread(self.tick)
+            await self.tick()
             await asyncio.sleep(TICK_SECONDS)

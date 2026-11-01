@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -124,7 +125,7 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, ca
                 feeds, sitemaps = cached["feeds"], cached["sitemaps"]
             else:
                 # Only the outlet's own feeds/sitemaps: pages can point anywhere.
-                links = find_feed_links(homepage_html, source.homepage) if homepage_html else []
+                links = await asyncio.to_thread(find_feed_links, homepage_html, source.homepage) if homepage_html else []
                 feeds = [u for u in links if "comment" not in u.lower() and same_site(u, source.homepage)][:2]
                 robots = await fetcher.robots_sitemaps(source.homepage)
                 sitemaps = _rank_sitemaps([u for u in robots if same_site(u, source.homepage)])

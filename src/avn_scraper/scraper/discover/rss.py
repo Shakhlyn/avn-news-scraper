@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 from datetime import datetime, timezone
 
@@ -53,4 +54,4 @@ async def discover_feed(fetcher: Fetcher, url: str, source_id: str) -> list[Cand
     resp = await fetcher.get(url)
     if resp is None or not looks_like_feed(resp.content):
         return []
-    return parse_feed(resp.content, source_id)
+    return await asyncio.to_thread(parse_feed, resp.content, source_id)

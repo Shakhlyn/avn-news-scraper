@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from urllib.parse import urljoin
 
@@ -51,4 +52,4 @@ async def discover_listing(fetcher: Fetcher, url: str, homepage: str, source_id:
     resp = await fetcher.get(url)
     if resp is None:
         return [], ""
-    return parse_listing(resp.text, str(resp.url), homepage, source_id), resp.text
+    return await asyncio.to_thread(parse_listing, resp.text, str(resp.url), homepage, source_id), resp.text

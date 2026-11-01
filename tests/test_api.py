@@ -212,8 +212,8 @@ def test_the_pool_size_comes_from_the_environment(config, database, monkeypatch)
     assert create_app(config, ScrapeManager(config, idle_run), schedule=False).state.pool.max_size == 7
 
 
-def test_the_scheduler_thread_reads_the_last_run_through_the_pool(client):
-    assert client.app.state.scheduler.last_run() is None
+def test_the_scheduler_reads_the_last_run_through_the_pool(client):
+    assert client.portal.call(client.app.state.scheduler.last_run) is None
 
 
 def test_browser_calls_are_allowed_from_the_site_only(client):
@@ -242,6 +242,28 @@ def test_health_is_not_rate_limited(client):
 
 
 # scrapes ---------------------------------------------------------------------
+async def wait_for_scrape(scrapes):
+    await asyncio.wait_for(scrapes._task, 5)
+
+
+def test_the_api_answers_during_a_scrape_that_is_stopped_at_shutdown(config, database, monkeypatch):
+    monkeypatch.setenv("AVN_REVIEW", "on")
+    entered, stopped = threading.Event(), threading.Event()
+
+    async def endless(cfg, opts):
+        entered.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            stopped.set()
+
+    with client_for(config, endless) as c:
+        assert c.post("/api/v1/scrape", headers=ORIGIN).status_code == 202
+        assert entered.wait(5)
+        assert c.get("/api/v1/health").status_code == 200
+    assert stopped.is_set()
+
+
 def test_scrape_runs_once_at_a_time_and_reports(config, database, monkeypatch):
     monkeypatch.setenv("AVN_REVIEW", "on")
     release, entered = threading.Event(), threading.Event()
@@ -249,7 +271,8 @@ def test_scrape_runs_once_at_a_time_and_reports(config, database, monkeypatch):
     async def slow(cfg, opts):
         assert opts.since_last_run
         entered.set()
-        release.wait(5)
+        while not release.is_set():
+            await asyncio.sleep(0.01)
         return RunResult("r", {"outcome": {"saved": 3}})
 
     with client_for(config, slow) as c:
@@ -258,18 +281,19 @@ def test_scrape_runs_once_at_a_time_and_reports(config, database, monkeypatch):
         assert c.get("/api/v1/scrape").json()["running"] is True
         assert c.post("/api/v1/scrape", headers=ORIGIN).status_code == 409
         release.set()
-        c.app.state.scrapes._thread.join(5)
+        c.portal.call(wait_for_scrape, c.app.state.scrapes)
         state = c.get("/api/v1/scrape").json()
     assert state["ok"] is True and state["running"] is False and state["outcome"] == {"saved": 3}
 
 
-def test_a_failed_scrape_is_reported(config):
+@pytest.mark.anyio
+async def test_a_failed_scrape_is_reported(config):
     async def boom(cfg, opts):
         raise RuntimeError("no network")
 
     scrapes = ScrapeManager(config, boom)
     assert scrapes.start("manual")
-    scrapes._thread.join(5)
+    await wait_for_scrape(scrapes)
     assert scrapes.state["ok"] is False and scrapes.state["error"] == "no network"
 
 
@@ -312,24 +336,37 @@ class FakeScrapes:
         return True
 
 
-def test_the_scheduler_waits_for_the_network_and_the_database():
-    scrapes = FakeScrapes()
-    offline = Scheduler(scrapes, lambda: None, AT_7, DHAKA, online=lambda: False)
-    assert offline.tick(dhaka(2, 8)) is False
+async def never_ran():
+    return None
 
-    def db_down():
+
+async def online():
+    return True
+
+
+async def offline():
+    return False
+
+
+@pytest.mark.anyio
+async def test_the_scheduler_waits_for_the_network_and_the_database():
+    scrapes = FakeScrapes()
+    assert await Scheduler(scrapes, never_ran, AT_7, DHAKA, online=offline).tick(dhaka(2, 8)) is False
+
+    async def db_down():
         raise OSError("down")
 
-    assert Scheduler(scrapes, db_down, AT_7, DHAKA, online=lambda: True).tick(dhaka(2, 8)) is False
+    assert await Scheduler(scrapes, db_down, AT_7, DHAKA, online=online).tick(dhaka(2, 8)) is False
     assert scrapes.started == []
 
-    ready = Scheduler(scrapes, lambda: None, AT_7, DHAKA, online=lambda: True)
-    assert ready.tick(dhaka(2, 8)) is True and ready.tick(dhaka(2, 8, 1)) is False
+    ready = Scheduler(scrapes, never_ran, AT_7, DHAKA, online=online)
+    assert await ready.tick(dhaka(2, 8)) is True and await ready.tick(dhaka(2, 8, 1)) is False
     assert scrapes.started == ["schedule"]
 
 
-def test_a_running_scrape_is_left_alone():
+@pytest.mark.anyio
+async def test_a_running_scrape_is_left_alone():
     scrapes = FakeScrapes()
     scrapes.running = True
-    assert Scheduler(scrapes, lambda: None, AT_7, DHAKA, online=lambda: True).tick(dhaka(2, 8)) is False
+    assert await Scheduler(scrapes, never_ran, AT_7, DHAKA, online=online).tick(dhaka(2, 8)) is False
     assert scrapes.started == []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 from ..fetch import Fetcher
@@ -29,7 +30,7 @@ async def discover_catchall(fetcher: Fetcher, queries: list[str]) -> list[Candid
         resp = await fetcher.get(BING_URL.format(q=quote_plus(q)))
         if resp is None:
             continue
-        for c in parse_feed(resp.content, source_id=""):
+        for c in await asyncio.to_thread(parse_feed, resp.content, source_id=""):
             c.url = unwrap_bing_link(c.url)
             c.source_id = "web:" + host_of(c.url)
             c.via = "catchall"

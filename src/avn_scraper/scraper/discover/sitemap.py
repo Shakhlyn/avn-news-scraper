@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -97,7 +98,7 @@ async def discover_sitemap(fetcher: Fetcher, url: str, source_id: str, cutoff: d
     if resp is None:
         return []
     try:
-        children, entries = parse_sitemap(resp.content)
+        children, entries = await asyncio.to_thread(parse_sitemap, resp.content)
     except (etree.XMLSyntaxError, OSError, ValueError, zlib.error):
         return []
     out: list[Candidate] = []
