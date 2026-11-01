@@ -6,6 +6,7 @@ from typing import Any
 
 import psycopg
 
+from ..core.database import fetch_all, fetch_one
 from ..services.stories import build_stories, to_report
 
 LISTED = ("COALESCE(r.verified, 1) <> 0 AND EXISTS "
@@ -60,52 +61,56 @@ def where_clause(f: NewsFilters, now: datetime, skip: str = "") -> tuple[str, di
     return " AND ".join(conds), params
 
 
-def _reports(conn: psycopg.Connection, where: str, params: dict[str, Any]):
-    rows = conn.execute(
+async def _reports(conn: psycopg.AsyncConnection, where: str, params: dict[str, Any]):
+    rows = await fetch_all(
+        conn,
         f"""SELECT a.id, a.url, a.canonical_url, a.source_id, a.source_name, a.language, a.title,
                    a.summary, a.body, a.published_at, a.district, a.body_missing, {STORY} AS story
-            {HITS} WHERE {where}""", params).fetchall()
+            {HITS} WHERE {where}""", params)
     cats: dict[str, list[dict[str, Any]]] = {}
     if rows:
-        for c in conn.execute(
-                "SELECT article_id, category, score, matched_terms FROM article_categories "
-                "WHERE article_id = ANY(%s)", ([r["id"] for r in rows],)):
+        for c in await fetch_all(
+                conn, "SELECT article_id, category, score, matched_terms FROM article_categories "
+                      "WHERE article_id = ANY(%s)", ([r["id"] for r in rows],)):
             cats.setdefault(c["article_id"], []).append(
                 {"category": c["category"], "score": c["score"] or 0, "terms": c["matched_terms"] or []})
     clusters = {r["id"]: r["story"] for r in rows}
     return [to_report(r, cats.get(r["id"], [])) for r in rows], lambda report: clusters[report["id"]]
 
 
-def list_news(conn: psycopg.Connection, f: NewsFilters, order: list[str],
-              now: datetime | None = None) -> dict[str, Any]:
+async def list_news(conn: psycopg.AsyncConnection, f: NewsFilters, order: list[str],
+                    now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     where, params = where_clause(f, now)
-    page = conn.execute(
+    page = await fetch_all(
+        conn,
         f"""WITH hits AS (SELECT a.id, a.source_id, {STORY} AS story {HITS} WHERE {where})
             SELECT h.story
             FROM hits h JOIN article_categories c ON c.article_id = h.id
             GROUP BY h.story
             ORDER BY count(DISTINCT h.source_id) DESC, max(c.score) DESC, h.story
             LIMIT %(limit)s OFFSET %(offset)s""",
-        {**params, "limit": f.limit, "offset": (f.page - 1) * f.limit}).fetchall()
+        {**params, "limit": f.limit, "offset": (f.page - 1) * f.limit})
     ids = [r["story"] for r in page]
-    total = conn.execute(f"SELECT count(DISTINCT {STORY}) AS n {HITS} WHERE {where}", params).fetchone()["n"]
+    total = (await fetch_one(conn, f"SELECT count(DISTINCT {STORY}) AS n {HITS} WHERE {where}", params))["n"]
 
     stories: list[dict[str, Any]] = []
     if ids:
-        reports, cluster_of = _reports(conn, f"{where} AND {STORY} = ANY(%(ids)s)", {**params, "ids": ids})
+        reports, cluster_of = await _reports(conn, f"{where} AND {STORY} = ANY(%(ids)s)", {**params, "ids": ids})
         built = {s["id"]: s for s in build_stories(reports, cluster_of, order)}
         stories = [built[i] for i in ids]
 
     by_source, source_params = where_clause(f, now, "source")
-    sources = conn.execute(
+    sources = await fetch_all(
+        conn,
         f"SELECT a.source_id AS id, max(a.source_name) AS name, count(*) AS count "
-        f"{HITS} WHERE {by_source} GROUP BY a.source_id ORDER BY name", source_params).fetchall()
+        f"{HITS} WHERE {by_source} GROUP BY a.source_id ORDER BY name", source_params)
     by_topic, topic_params = where_clause(f, now, "topic")
-    topics = conn.execute(
+    topics = await fetch_all(
+        conn,
         f"SELECT c.category AS key, count(DISTINCT {STORY}) AS count "
         f"{HITS} JOIN article_categories c ON c.article_id = a.id "
-        f"WHERE {by_topic} GROUP BY c.category", topic_params).fetchall()
+        f"WHERE {by_topic} GROUP BY c.category", topic_params)
 
     return {
         "generatedAt": now.isoformat(),
@@ -119,7 +124,7 @@ def list_news(conn: psycopg.Connection, f: NewsFilters, order: list[str],
     }
 
 
-def find_story(conn: psycopg.Connection, story_id: str, order: list[str]) -> dict[str, Any] | None:
+async def find_story(conn: psycopg.AsyncConnection, story_id: str, order: list[str]) -> dict[str, Any] | None:
     """Every report of a story, whichever day it came in."""
-    reports, cluster_of = _reports(conn, f"{LISTED} AND {STORY} = %(id)s", {"id": story_id})
+    reports, cluster_of = await _reports(conn, f"{LISTED} AND {STORY} = %(id)s", {"id": story_id})
     return build_stories(reports, cluster_of, order)[0] if reports else None

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
@@ -28,21 +28,29 @@ from .services.scrape_manager import ScrapeManager
 def create_app(cfg: Config | None = None, scrapes: ScrapeManager | None = None, schedule: bool = True) -> FastAPI:
     cfg = cfg or load_config()
     settings = Settings()
-    pool = make_pool(settings.database_url)
+    pool = make_pool(settings.database_url, settings.db_pool_max)
     scrapes = scrapes or ScrapeManager(cfg)
     hour, minute = str(cfg.settings.get("daily_at", "07:00")).split(":")
-    scheduler = Scheduler(scrapes, lambda: last_full_run(pool), time(int(hour), int(minute)), ZoneInfo(cfg.timezone))
+    loop: asyncio.AbstractEventLoop | None = None
+
+    def last_run() -> datetime | None:
+        """The scheduler still ticks in a thread, and the pool lives on the app's loop."""
+        return asyncio.run_coroutine_threadsafe(last_full_run(pool), loop).result()
+
+    scheduler = Scheduler(scrapes, last_run, time(int(hour), int(minute)), ZoneInfo(cfg.timezone))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        pool.open(wait=False)  # the database may still be starting after a boot
+        nonlocal loop
+        loop = asyncio.get_running_loop()
+        await pool.open(wait=False)  # the database may still be starting after a boot
         task = asyncio.create_task(scheduler.loop()) if schedule else None
         yield
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        pool.close()
+        await pool.close()
 
     app = FastAPI(title="AVN news service", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

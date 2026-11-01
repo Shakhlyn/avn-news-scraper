@@ -25,23 +25,23 @@ def _when(row: dict[str, Any], reviewing: bool) -> dict[str, str]:
 
 
 @router.get("", response_model=AcceptedList, response_model_exclude_none=True)
-def list_accepted(conn: Db, settings: CurrentSettings):
+async def list_accepted(conn: Db, settings: CurrentSettings):
     reviewing = settings.reviewing
     return {"reviewing": reviewing,
-            "stories": [{**r["story"], "accepted": _when(r, reviewing)} for r in repo.list_accepted(conn)]}
+            "stories": [{**r["story"], "accepted": _when(r, reviewing)} for r in await repo.list_accepted(conn)]}
 
 
 @router.post("", status_code=201, response_model=AcceptResponse, dependencies=guarded)
 @limiter.limit(WRITE_LIMIT)
-def accept(request: Request, body: AcceptRequest, conn: Db, order: CategoryOrder):
-    story = find_story(conn, body.id, order)
+async def accept(request: Request, body: AcceptRequest, conn: Db, order: CategoryOrder):
+    story = await find_story(conn, body.id, order)
     if story is None:
         raise HTTPException(404, "That story is not in the news database.")
-    return {"id": body.id, "accepted": _when(repo.add_accepted(conn, body.id, story, ""), True)}
+    return {"id": body.id, "accepted": _when(await repo.add_accepted(conn, body.id, story, ""), True)}
 
 
 @router.delete("/{story_id}", response_model=AcceptResponse, dependencies=guarded)
 @limiter.limit(WRITE_LIMIT)
-def withdraw(request: Request, story_id: Annotated[str, Path(pattern=STORY_ID)], conn: Db):
-    repo.remove_accepted(conn, story_id)
+async def withdraw(request: Request, story_id: Annotated[str, Path(pattern=STORY_ID)], conn: Db):
+    await repo.remove_accepted(conn, story_id)
     return {"id": story_id, "accepted": None}

@@ -186,6 +186,15 @@ def test_database_down_is_a_plain_503(config, monkeypatch):
     assert response.status_code == 503 and "error" in response.json()
 
 
+def test_the_pool_size_comes_from_the_environment(config, database, monkeypatch):
+    monkeypatch.setenv("DB_POOL_MAX", "7")
+    assert create_app(config, ScrapeManager(config, idle_run), schedule=False).state.pool.max_size == 7
+
+
+def test_the_scheduler_thread_reads_the_last_run_through_the_pool(client):
+    assert client.app.state.scheduler.last_run() is None
+
+
 def test_browser_calls_are_allowed_from_the_site_only(client):
     site = {"origin": "http://localhost:4321", "access-control-request-method": "POST",
             "access-control-request-headers": "content-type"}

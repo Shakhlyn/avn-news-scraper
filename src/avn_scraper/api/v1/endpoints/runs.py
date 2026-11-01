@@ -12,5 +12,5 @@ router = APIRouter(prefix="/runs", tags=["scraper"])
 
 
 @router.get("", response_model=list[Run])
-def list_runs(conn: Db, limit: Annotated[int, Query(ge=1, le=100)] = 20):
-    return repo.list_runs(conn, limit)
+async def list_runs(conn: Db, limit: Annotated[int, Query(ge=1, le=100)] = 20):
+    return await repo.list_runs(conn, limit)

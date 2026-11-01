@@ -9,12 +9,12 @@ from fastapi import HTTPException, Request
 LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]", "testserver"]
 
 
-def require_reviewing(request: Request) -> None:
+async def require_reviewing(request: Request) -> None:
     if not request.app.state.settings.reviewing:
         raise HTTPException(403, "Stories are accepted on the review desk only.")
 
 
-def same_origin(request: Request) -> None:
+async def same_origin(request: Request) -> None:
     """Writes come from the desk's own pages only: a browser always sends Origin on a
     POST or DELETE, and another site cannot fake it."""
     host = request.headers.get("host", "")

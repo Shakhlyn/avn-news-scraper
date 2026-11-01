@@ -10,6 +10,6 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 @router.get("")
 @limiter.exempt
-def health(request: Request, conn: Db) -> dict[str, str]:
-    conn.execute("SELECT 1")
+async def health(request: Request, conn: Db) -> dict[str, str]:
+    await conn.execute("SELECT 1")
     return {"status": "ok"}

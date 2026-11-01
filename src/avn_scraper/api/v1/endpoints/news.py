@@ -13,7 +13,7 @@ router = APIRouter(prefix="/news", tags=["news"])
 
 
 @router.get("", response_model=NewsPage)
-def list_news(
+async def list_news(
     conn: Db,
     settings: CurrentSettings,
     order: CategoryOrder,
@@ -28,4 +28,4 @@ def list_news(
     """Stories, widest reported first. Unchecked, so on the review desk only."""
     if not settings.reviewing:
         raise HTTPException(404, "The unchecked news is on the review desk only.")
-    return repo.list_news(conn, repo.NewsFilters(start, end, source, topic, q.strip(), page, limit), order)
+    return await repo.list_news(conn, repo.NewsFilters(start, end, source, topic, q.strip(), page, limit), order)
