@@ -16,9 +16,22 @@ http:
   timeout_seconds: 25
   concurrency: 12          # total parallel requests
   per_host_delay: 1.0      # seconds between requests to the same site
+  per_host_jitter: 0.5     # plus a random 0-50% of that, so requests have no fixed rhythm
   retries: 2
   respect_robots: true
   max_response_mb: 20      # larger responses are dropped
+  # Block protection: never push a site into banning our IP. After block_threshold
+  # block answers in a row (403, 429, bot-challenge page) the site gets no more requests
+  # this run, and none for block_cooldown_hours (saved in data/cache/host_blocks.json, so
+  # check-sources and dry runs skip it too; delete its entry to retry sooner). A 429 asking
+  # to wait more than max_retry_after seconds stops the site at once.
+  block_threshold: 3
+  block_cooldown_hours: 12
+  max_retry_after: 120
+  # Outlets with `fetch: impersonate` (sources.yaml) are fetched with a Chrome TLS
+  # fingerprint (curl_cffi), at least impersonate_delay seconds apart.
+  impersonate: chrome
+  impersonate_delay: 3.0
 
 # Upper bound on full-article downloads per outlet per run (after keyword pre-filter).
 max_articles_per_source: 80

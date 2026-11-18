@@ -23,6 +23,9 @@ PROJECT_ROOT = _project_root()
 DEFAULT_CONFIG_DIR = PROJECT_ROOT / "config"
 
 
+FETCH_MODES = ("plain", "impersonate")
+
+
 @dataclass
 class Source:
     id: str
@@ -35,6 +38,7 @@ class Source:
     sitemaps: list[str] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
     auto_sections: bool = True
+    fetch: str = "plain"  # "impersonate": Chrome TLS fingerprint, for bot-protected outlets
     enabled: bool = True
 
 
@@ -54,6 +58,10 @@ class Config:
     def timezone(self) -> str:
         return self.settings.get("timezone", "Asia/Dhaka")
 
+    @property
+    def host_blocks_path(self) -> Path:
+        return self.data_dir / "cache" / "host_blocks.json"
+
     def source(self, source_id: str) -> Source | None:
         return next((s for s in self.sources if s.id == source_id), None)
 
@@ -70,6 +78,9 @@ def load_config(config_dir: Path | None = None) -> Config:
     keywords = _read_yaml(config_dir / "keywords.yaml")
 
     sources = [Source(**entry) for entry in raw_sources]
+    bad_fetch = sorted(s.id for s in sources if s.fetch not in FETCH_MODES)
+    if bad_fetch:
+        raise ValueError(f"sources.yaml: fetch must be one of {FETCH_MODES} ({bad_fetch})")
     ids = [s.id for s in sources]
     duplicates = {i for i in ids if ids.count(i) > 1}
     if duplicates:

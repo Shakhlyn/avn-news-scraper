@@ -49,7 +49,7 @@ Use `.venv/bin/avn`, or activate the venv first.
 
 1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, the print edition, every top-level section tab, RSS feeds and news sitemaps. Tabs and the print edition are found on the homepage on each run, and each one is read page by page back to 24 hours ago. The rules are in [docs/scraping-rules.md](docs/scraping-rules.md). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
-3. **Fetch and extract**: requests are polite (1 at a time per site, robots.txt respected, retries). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
+3. **Fetch and extract**: requests are polite (1 at a time per site with jittered spacing, robots.txt respected, retries, and a stop plus cooldown for any site that starts refusing us). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).
 5. **Store**: a row in Postgres and the raw HTML (gzipped) on disk. The same story from different outlets gets the same `story_cluster_id`, and the district is guessed from the text.
 6. **Export**: daily CSV, one CSV per category, and `master.xlsx`.
@@ -57,7 +57,7 @@ Use `.venv/bin/avn`, or activate the venv first.
 URLs that were checked and didn't match are remembered, so they aren't downloaded again.
 
 If an article page can't be downloaded:
-- **Permanent failure** (403 bot protection, 404, robots.txt): the article is judged by its headline (and feed summary, if any). It is saved with `body_missing = 1` if it matches, and is not retried.
+- **Permanent failure** (403, 404, robots.txt): the article is judged by its headline (and feed summary, if any). It is saved with `body_missing = 1` if it matches, and is not retried.
 - **Temporary failure** (timeout, server error): it is retried on the next run.
 
 The run log lists every failed download with its reason.
@@ -156,7 +156,7 @@ Spot-check the daily CSV for the first week or two, mark false positives in `rev
 ## Sources and limitations
 
 - `config/sources.yaml` lists ~60 outlets. Add one with just an `id`, `name`, `language`, `type` and `homepage`; feeds are discovered automatically. Then run `avn check-sources --sources <id>`.
-- **Blocked outlets.** As of Oct 2026, these return HTTP 403 to every automated request because of Cloudflare bot protection: Kaler Kantho, Bangladesh Pratidin, Kalbela, Jai Jai Din, Banglanews24, Somoy TV, Jamuna TV, Daily Sun, Netra News, Jago News and Risingbd. They are `enabled: false`. Dhaka Post and Jugantor block their article pages but leave an RSS feed or sitemap open, so matching articles are stored from the headline (plus RSS summary for Dhaka Post) with `body_missing = 1`.
+- **Blocked outlets.** Many outlets sit behind Cloudflare, which challenges Python HTTP clients by their TLS fingerprint. Those marked `fetch: impersonate` in `sources.yaml` are fetched with a Chrome fingerprint (curl_cffi). A site that keeps refusing us is stopped for the run and put on a 12-hour cooldown (`data/cache/host_blocks.json`), so our IP is never pushed into a ban. As of Nov 2026, Jai Jai Din (redirect loop) and Somoy TV (JavaScript bot check) stay `enabled: false`, and Kaler Kantho challenges some inner pages even with the Chrome fingerprint. See [docs/scraping-rules.md](docs/scraping-rules.md#blocks-never-get-the-ip-banned).
 - **Search catch-all.** This is off by default (`settings.yaml → search_catchall`). It runs the queries in `keywords.yaml → catchall_queries` against Bing News RSS. That finds articles from blocked outlets (stored as headline and snippet) and from small or local outlets that aren't configured. Bing's feed terms allow "personal, non-commercial use", so check that your use fits before enabling it. Results can include foreign outlets (`source_type = 'web'`). Google News RSS is not used because its robots.txt disallows automated access.
 - Pre-filtering is based on headlines and summaries. An article whose headline has no keyword and whose site gives no summary can be missed. `--no-prefilter` downloads everything but is much slower.
 

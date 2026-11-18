@@ -101,6 +101,8 @@ def run(
         reasons = Counter(f["reason"] for f in st["fetch_failed"])
         console.print(f"Downloads that failed: {dict(reasons)} "
                       "(blocked pages are judged by headline; temporary errors retry next run)")
+    for host, why in (st.get("hosts_stopped") or {}).items():
+        console.print(f"[red]Not fetched: {host}: {why}[/]")
     if result.saved:
         title = "Would save (dry run)" if dry_run else "Saved to Postgres"
         table = Table("date", "source", "categories", "title", title=title, show_lines=False)
@@ -131,11 +133,13 @@ def check_sources(
     memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")  # read only: never saved here
 
     async def go():
-        async with Fetcher(cfg.settings.get("http") or {}) as fetcher:
-            return await asyncio.gather(*(discover_source(fetcher, s, cutoff, cache, cfg.settings.get("sections"), memory)
-                                          for s in selected))
+        async with Fetcher(cfg.settings.get("http") or {}, sources=cfg.sources,
+                           cooldown_path=cfg.host_blocks_path) as fetcher:
+            found = await asyncio.gather(*(discover_source(fetcher, s, cutoff, cache, cfg.settings.get("sections"), memory)
+                                           for s in selected))
+            return found, fetcher.stopped_hosts(), dict(fetcher.stats)
 
-    results = asyncio.run(go())
+    results, stopped, http_stats = asyncio.run(go())
     cache.save()
     table = Table("source", "listing", "tabs", "section", "rss", "sitemap", "feeds / sitemaps used", "status")
     for r in sorted(results, key=lambda r: (r.ok, r.source_id)):
@@ -150,6 +154,11 @@ def check_sources(
         for r in sorted(results, key=lambda r: r.source_id):
             console.print(f"[bold]{r.source_id}[/] tabs: {' '.join((r.endpoints or {}).get('sections') or []) or '-'}")
     console.print(f"{sum(r.ok for r in results)}/{len(results)} sources returned items")
+    blocks = {k: v for k, v in http_stats.items() if k.startswith("block_") or k == "host_blocked"}
+    if blocks:
+        console.print(f"[yellow]Block answers: {blocks}[/]")
+    for host, why in stopped.items():
+        console.print(f"[red]Not fetched: {host}: {why}[/]")
 
 
 @app.command()

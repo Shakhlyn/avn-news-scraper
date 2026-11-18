@@ -84,10 +84,34 @@ The very first run has no memory yet, so tabs without dates are read to the page
 ## Politeness and safety
 
 - `robots.txt` is respected. Requests to each site go one at a time, `per_host_delay`
-  (1 s) apart, with retries.
+  (1 s) apart plus a random 0–50% (`per_host_jitter`), with retries.
 - Only public addresses are fetched, and response size is capped (`fetch.py`).
-- Outlets that block all automated access (Cloudflare 403) are `enabled: false` in
-  `sources.yaml` and are not worked around.
+
+## Blocks: never get the IP banned
+
+A banned IP also stops every later test, so the scraper backs off before a site escalates.
+
+- **Block answers** are 403, 429, and bot-challenge pages (Cloudflare "Just a moment",
+  `cf-mitigated` header, "Bot Verification", even when sent with status 200).
+- **Slow down:** each block answer pushes that site's next request back (10 s, then 20 s).
+  A 429 waits out its `Retry-After`.
+- **Stop:** after `block_threshold` (3) block answers in a row, the site gets no more
+  requests this run. A 429 asking to wait more than `max_retry_after` (120 s) stops it at once.
+- **Cooldown:** a stopped site is saved in `data/cache/host_blocks.json` and left alone for
+  `block_cooldown_hours` (12). `avn run`, dry runs and `check-sources` all skip it and print
+  "Not fetched". Delete its entry to retry sooner, but only after fixing the cause.
+- A challenge or 429 is temporary (the site refused us, not the page), so those articles
+  retry next run. A plain 403 stays a permanent failure for that page.
+- **Chrome fingerprint:** Cloudflare challenges Python HTTP clients by their TLS fingerprint
+  whatever the User-Agent. Outlets with `fetch: impersonate` in `sources.yaml` are fetched
+  through curl_cffi with a Chrome fingerprint and browser headers (Referer = the homepage),
+  at least `impersonate_delay` (3 s) apart. The same address, redirect and size checks
+  apply, and `robots.txt` is still read as `AVNNewsScraper`.
+- Outlets whose blocks a fingerprint doesn't fix are `enabled: false`, with the reason as
+  a comment in `sources.yaml`.
+- To diagnose a site, probe it with a handful of spaced requests, never a crawl: a 403 with
+  `cf-mitigated: challenge` means try `fetch: impersonate`; a challenge even then needs a
+  real browser (not built); a timeout or 403 only from one machine means an IP block.
 
 ## Known limits
 

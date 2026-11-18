@@ -165,7 +165,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
                                     int(s.get("endpoint_cache_days", 7)))
     memory = await asyncio.to_thread(ListingMemory, cfg.data_dir / "cache" / "listing_seen.json")
 
-    async with Fetcher(s.get("http") or {}, transport=transport) as fetcher:
+    async with Fetcher(s.get("http") or {}, transport=transport, sources=cfg.sources,
+                       cooldown_path=cfg.host_blocks_path) as fetcher:
         # 1. discover
         results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)
                                          for src in sources))
@@ -203,6 +204,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         # 3. fetch & extract
         fetched = await asyncio.gather(*(_fetch_one(fetcher, c) for c in selected))
         stats["http"] = dict(fetcher.stats)
+        if fetcher.stopped_hosts():
+            stats["hosts_stopped"] = fetcher.stopped_hosts()
         failures = dict(fetcher.failures)
 
     # 4. classify, cluster, store

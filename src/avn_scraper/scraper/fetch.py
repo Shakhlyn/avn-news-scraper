@@ -1,4 +1,4 @@
-"""Polite async HTTP client: per-site pacing, robots.txt, retries.
+"""Polite async HTTP client: per-site pacing, robots.txt, retries, block protection.
 
 URLs come from untrusted pages (feed items, search results, redirects), so:
 - every request, including each redirect hop, must target a public address
@@ -6,24 +6,52 @@ URLs come from untrusted pages (feed items, search results, redirects), so:
   which defeats DNS rebinding);
 - bodies are read raw and decompressed here with a size budget, so neither a
   large response nor a gzip bomb can exhaust memory.
+
+A site that starts blocking us must never be pushed into banning our IP (a ban
+would also stop every later test), so:
+- requests to a site are spaced `per_host_delay` apart plus random jitter;
+- a 429 `Retry-After` is honoured, and a site asking for a longer wait is stopped;
+- after `block_threshold` block answers in a row (403, 429, a bot-challenge page)
+  the site is not asked again this run, and it is put on a cooldown saved in
+  `data/cache/host_blocks.json`, so later runs and `check-sources` skip it too.
+
+Outlets whose bot protection rejects the TLS fingerprint of Python clients use
+`fetch: impersonate` (sources.yaml): their requests go through curl_cffi with a
+Chrome fingerprint, slower pacing, and the same address and size checks.
 """
 
 from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
+import random
+import re
 import time
 import zlib
 from collections import Counter, defaultdict
-from urllib.parse import urlsplit
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
+from curl_cffi.curl import CurlError
+from curl_cffi.requests import AsyncSession
 
 log = logging.getLogger(__name__)
 
 _DROP_HEADERS = ("content-encoding", "content-length", "transfer-encoding")
+_MAX_REDIRECTS = 10
+# Bot-check interstitials served instead of the page (Cloudflare, generic JS checks).
+# Only small bodies are tested: real pages can carry Cloudflare's challenge scripts.
+_CHALLENGE_TITLE = re.compile(rb"<title[^>]*>\s*(just a moment|attention required|bot verification"
+                              rb"|access denied|checking your browser)", re.I)
+_CHALLENGE_MAX_BYTES = 40_000
 
 
 class BlockedURL(Exception):
@@ -45,15 +73,96 @@ def _is_public_ip(value: str) -> bool:
         return False
 
 
+def _site_key(host: str) -> str:
+    return host.lower().removeprefix("www.")
+
+
+def block_kind(resp: httpx.Response) -> str | None:
+    """'rate_limited', 'challenge' or 'forbidden' when the answer is the site refusing us."""
+    if resp.status_code == 429:
+        return "rate_limited"
+    if resp.headers.get("cf-mitigated") or (
+            len(resp.content) <= _CHALLENGE_MAX_BYTES and _CHALLENGE_TITLE.search(resp.content[:8000])):
+        return "challenge"
+    if resp.status_code == 403:
+        return "forbidden"
+    return None
+
+
+def _retry_after(resp: httpx.Response) -> float | None:
+    value = (resp.headers.get("retry-after") or "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return float(value)
+    try:
+        return max(0.0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+class HostCooldowns:
+    """Sites that blocked us, left alone until a set time. Kept in a small JSON file."""
+
+    def __init__(self, path: Path | None):
+        self.path = path
+        self.entries: dict[str, dict[str, str]] = {}
+
+    def load(self) -> None:
+        if not self.path or not self.path.exists():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            log.warning("ignoring unreadable %s", self.path)
+            return
+        now = datetime.now(timezone.utc)
+        for host, entry in (data.items() if isinstance(data, dict) else []):
+            try:
+                if datetime.fromisoformat(entry["until"]) > now:
+                    self.entries[host] = entry
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    def until(self, host: str) -> str | None:
+        entry = self.entries.get(host)
+        if entry and datetime.fromisoformat(entry["until"]) > datetime.now(timezone.utc):
+            return entry["until"]
+        return None
+
+    def add(self, host: str, reason: str, hours: float) -> None:
+        until = datetime.now(timezone.utc) + timedelta(hours=hours)
+        self.entries[host] = {"until": until.isoformat(timespec="seconds"), "reason": reason}
+
+    def save(self) -> None:
+        if not self.path:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.entries, indent=1, sort_keys=True), encoding="utf-8")
+        tmp.replace(self.path)
+
+
 class Fetcher:
-    def __init__(self, http_settings: dict, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, http_settings: dict, transport: httpx.AsyncBaseTransport | None = None, *,
+                 sources: Iterable[Any] = (), cooldown_path: Path | None = None,
+                 curl_session: Any = None):
         s = http_settings
         self.user_agent = s.get("user_agent", "AVNNewsScraper/0.1")
         self.robots_agent = s.get("robots_agent", "AVNNewsScraper")
         self.per_host_delay = float(s.get("per_host_delay", 1.0))
+        self.jitter = float(s.get("per_host_jitter", 0.5))  # extra random delay, as a share of the delay
         self.retries = int(s.get("retries", 2))
         self.respect_robots = bool(s.get("respect_robots", True))
         self.max_bytes = int(float(s.get("max_response_mb", 20)) * 1024 * 1024)
+        self.timeout = float(s.get("timeout_seconds", 25))
+        self.block_threshold = int(s.get("block_threshold", 3))
+        self.cooldown_hours = float(s.get("block_cooldown_hours", 12))
+        self.max_retry_after = float(s.get("max_retry_after", 120))
+        self.impersonate = str(s.get("impersonate", "chrome"))
+        self.impersonate_delay = float(s.get("impersonate_delay", 3.0))
+        self._impersonated = {_site_key(urlsplit(src.homepage).hostname or "")
+                              for src in sources if getattr(src, "fetch", "plain") == "impersonate"}
         self._public_hosts: dict[str, bool] = {}
         self._client = httpx.AsyncClient(
             headers={
@@ -62,35 +171,60 @@ class Fetcher:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Encoding": "gzip",  # the only coding _get_capped decodes
             },
-            timeout=float(s.get("timeout_seconds", 25)),
+            timeout=self.timeout,
             follow_redirects=True,
             event_hooks={"request": [self._check_target], "response": [self._check_peer]},
             transport=transport,
             trust_env=False,  # a proxy would hide the real peer address from _check_peer
         )
+        self._curl = curl_session
+        self._own_curl = False
         self._sem = asyncio.Semaphore(int(s.get("concurrency", 12)))
         self._host_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._host_last: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
         self._robots_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._strikes: Counter[str] = Counter()  # block answers in a row, per host
+        self._stopped: dict[str, str] = {}  # host -> why it is not asked again this run
+        self.cooldowns = HostCooldowns(cooldown_path)
         self.stats: Counter[str] = Counter()
         self.failures: dict[str, str] = {}  # url -> reason, for the run log
 
     async def __aenter__(self) -> Fetcher:
+        await asyncio.to_thread(self.cooldowns.load)
+        for host, entry in self.cooldowns.entries.items():
+            log.warning("%s is on a block cooldown until %s (%s); not fetching it",
+                        host, entry["until"], entry.get("reason"))
+        if self._impersonated and self._curl is None:
+            # trust_env=False: an environment proxy would hide the real peer address.
+            self._curl = AsyncSession(impersonate=self.impersonate, timeout=self.timeout, trust_env=False)
+            self._own_curl = True
         return self
 
     async def __aexit__(self, *exc) -> None:
         await self._client.aclose()
+        if self._own_curl:
+            await self._curl.close()
 
-    async def _check_target(self, request: httpx.Request) -> None:
-        """Request hook (first request and every redirect): early check by host name.
+    def uses_impersonation(self, host: str) -> bool:
+        key = _site_key(host)
+        return any(key == site or key.endswith("." + site) for site in self._impersonated)
 
-        Resolution failures block the request and are not cached. This check alone
-        can be raced by DNS rebinding; _check_peer is the authoritative one.
+    def stopped_hosts(self) -> dict[str, str]:
+        """Hosts not fetched (this run's blocks and saved cooldowns), with the reason."""
+        out = {h: f"cooldown until {e['until']} ({e.get('reason')})" for h, e in self.cooldowns.entries.items()}
+        out.update(self._stopped)
+        return out
+
+    async def _ensure_public(self, url: str) -> None:
+        """Early check by host name. Resolution failures block the request and are not cached.
+
+        This check alone can be raced by DNS rebinding; the peer check is the authoritative one.
         """
-        if request.url.scheme not in ("http", "https"):
-            raise BlockedURL(str(request.url))
-        host = request.url.host
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise BlockedURL(url)
+        host = parts.hostname
         if host not in self._public_hosts:
             try:
                 ipaddress.ip_address(host)
@@ -99,11 +233,15 @@ class Fetcher:
                 try:
                     infos = await asyncio.get_running_loop().getaddrinfo(host, None)
                 except OSError as exc:
-                    raise BlockedURL(f"{request.url} (cannot resolve)") from exc
+                    raise BlockedURL(f"{url} (cannot resolve)") from exc
                 public = bool(infos) and all(_is_public_ip(info[4][0]) for info in infos)
             self._public_hosts[host] = public
         if not self._public_hosts[host]:
-            raise BlockedURL(str(request.url))
+            raise BlockedURL(url)
+
+    async def _check_target(self, request: httpx.Request) -> None:
+        """Request hook (first request and every redirect)."""
+        await self._ensure_public(str(request.url))
 
     async def _check_peer(self, response: httpx.Response) -> None:
         """Response hook (every hop): the address actually connected to must be public.
@@ -148,6 +286,39 @@ class Fetcher:
             headers = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in _DROP_HEADERS]
             return httpx.Response(r.status_code, headers=headers, content=bytes(body), request=r.request)
 
+    async def _get_impersonated(self, url: str) -> httpx.Response:
+        """GET through curl_cffi with a browser TLS fingerprint and browser headers.
+
+        Redirects are followed here, hop by hop, so each target gets the public-address
+        check; curl decodes the body itself, in small chunks, which are counted
+        against the size budget as they arrive.
+        """
+        parts = urlsplit(url)
+        referer = f"{parts.scheme}://{parts.netloc}/"
+        for _ in range(_MAX_REDIRECTS + 1):
+            await self._ensure_public(url)
+            headers = {"Accept-Language": "bn-BD,bn;q=0.9,en;q=0.8"}
+            if url != referer:
+                headers["Referer"] = referer
+            async with self._curl.stream("GET", url, headers=headers, allow_redirects=False,
+                                         timeout=self.timeout) as r:
+                if r.primary_ip and not _is_public_ip(r.primary_ip):
+                    raise BlockedURL(f"{url} (connected to {r.primary_ip})")
+                location = r.headers.get("location")
+                if 300 <= r.status_code < 400 and location:
+                    url = urljoin(url, location)
+                    continue
+                body = bytearray()
+                async for chunk in r.aiter_content():
+                    body += chunk
+                    if len(body) > self.max_bytes:
+                        raise ResponseTooLarge(url)
+                kept = [(k, v) for k, v in r.headers.multi_items()
+                        if v is not None and k.lower() not in _DROP_HEADERS]
+                return httpx.Response(r.status_code, headers=kept, content=bytes(body),
+                                      request=httpx.Request("GET", url))
+        raise httpx.TooManyRedirects(f"{url}: more than {_MAX_REDIRECTS} redirects")
+
     async def _robots_for(self, url: str) -> RobotFileParser | None:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
@@ -171,34 +342,81 @@ class Fetcher:
         parser = await self._robots_for(url)
         return parser is None or parser.can_fetch(self.robots_agent, url)
 
+    def _is_stopped(self, host: str, url: str) -> bool:
+        if host in self._stopped or self.cooldowns.until(host):
+            self.stats["host_blocked"] += 1
+            self.failures[url] = "host_blocked"
+            return True
+        return False
+
+    async def _stop_host(self, host: str, reason: str) -> None:
+        if host in self._stopped:
+            return
+        self._stopped[host] = reason
+        self.cooldowns.add(host, reason, self.cooldown_hours)
+        log.warning("%s keeps refusing us (%s): no more requests to it this run, and none for %g h "
+                    "(delete it from %s to retry sooner)", host, reason, self.cooldown_hours, self.cooldowns.path)
+        await asyncio.to_thread(self.cooldowns.save)
+
+    async def _note_block(self, host: str, kind: str, url: str) -> None:
+        self.stats[f"block_{kind}"] += 1
+        self._strikes[host] += 1
+        if self._strikes[host] >= self.block_threshold:
+            await self._stop_host(host, f"{self._strikes[host]} block answers in a row, last: {kind} on {url}")
+
     async def _request(self, url: str) -> httpx.Response | None:
-        host = urlsplit(url).netloc
+        parts = urlsplit(url)
+        host = parts.netloc
+        impersonate = self.uses_impersonation(parts.hostname or "")
+        delay = max(self.per_host_delay, self.impersonate_delay) if impersonate else self.per_host_delay
+        resp: httpx.Response | None = None
         for attempt in range(self.retries + 1):
             async with self._host_locks[host]:
-                wait = self._host_last.get(host, 0) + self.per_host_delay - time.monotonic()
+                if self._is_stopped(host, url):
+                    return None
+                wait = self._host_last.get(host, 0) + delay * (1 + random.uniform(0, self.jitter)) - time.monotonic()
                 if wait > 0:
                     await asyncio.sleep(wait)
                 try:
                     async with self._sem:
-                        resp = await self._get_capped(url)
+                        resp = await (self._get_impersonated(url) if impersonate else self._get_capped(url))
                 except (BlockedURL, ResponseTooLarge, UnsupportedEncoding) as exc:
                     self.stats[type(exc).__name__] += 1
                     self.failures[url] = type(exc).__name__
                     log.warning("not fetching %s: %s", url, exc)
                     return None
-                except httpx.HTTPError as exc:
+                except (httpx.HTTPError, CurlError) as exc:
                     resp = None
                     log.debug("fetch error %s: %r", url, exc)
                 finally:
                     self._host_last[host] = time.monotonic()
-            if resp is not None and resp.status_code < 500 and resp.status_code != 429:
+            kind = block_kind(resp) if resp is not None else None
+            if kind:
+                await self._note_block(host, kind, url)
+                if host in self._stopped:
+                    return resp
+                pause = _retry_after(resp) if kind == "rate_limited" else None
+                if pause is not None and pause > self.max_retry_after:
+                    await self._stop_host(host, f"asked to wait {pause:.0f} s")
+                    return resp
+                # Slow the whole site down, not just this URL: the pacing above makes
+                # every later request to the host wait until then.
+                if pause is None:
+                    pause = 5.0 * 2 ** self._strikes[host]
+                self._host_last[host] = time.monotonic() + pause
+                if kind == "rate_limited" and attempt < self.retries:
+                    continue
                 return resp
+            if resp is not None:
+                self._strikes[host] = 0
+                if resp.status_code < 500:
+                    return resp
             if attempt < self.retries:
-                await asyncio.sleep(2 * (attempt + 1))
+                await asyncio.sleep(2 * (attempt + 1) + random.uniform(0, 1))
         return resp
 
     async def get(self, url: str) -> httpx.Response | None:
-        """GET url; None when blocked by robots.txt, on network error or non-2xx status."""
+        """GET url; None when blocked by robots.txt, on network error, block or non-2xx status."""
         if not await self.allowed(url):
             self.stats["robots_blocked"] += 1
             self.failures[url] = "robots_blocked"
@@ -206,8 +424,15 @@ class Fetcher:
             return None
         resp = await self._request(url)
         if resp is None:
-            self.stats["errors"] += 1
+            if self.failures.get(url) != "host_blocked":
+                self.stats["errors"] += 1
             self.failures.setdefault(url, "network_error")
+            return None
+        kind = block_kind(resp)
+        if kind in ("challenge", "rate_limited"):
+            # Temporary: the site refused us, not this page, so retry it on a later run.
+            self.failures[url] = f"blocked_{kind}"
+            log.debug("blocked (%s, HTTP %s) for %s", kind, resp.status_code, url)
             return None
         if resp.status_code >= 400:
             self.stats[f"http_{resp.status_code}"] += 1
