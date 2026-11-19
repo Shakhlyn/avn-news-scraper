@@ -93,6 +93,11 @@ async def migrate(conn: psycopg.AsyncConnection) -> list[str]:
     return applied
 
 
+def _or_none(value: Any) -> Any:
+    """Empty strings from the log become NULL (timestamps and numbers would reject them)."""
+    return None if value == "" else value
+
+
 class PostgresStorage(Storage):
     def __init__(self, data_dir: Path, conn: psycopg.AsyncConnection):
         self.root = data_dir
@@ -194,6 +199,34 @@ class PostgresStorage(Storage):
         row = await fetch_one(self.conn, "SELECT max(started_at) AS at FROM runs WHERE finished_at IS NOT NULL "
                                          "AND stats->'only_sources' IS NULL")
         return row["at"]
+
+    async def known_block_logs(self) -> set[str]:
+        return {r["run_id"] for r in await fetch_all(self.conn, "SELECT run_id FROM block_log_runs")}
+
+    async def save_block_log(self, parsed: dict[str, Any]) -> None:
+        run = parsed["run"]
+        async with self.conn.transaction():
+            await self.conn.execute(
+                "INSERT INTO block_log_runs(run_id, mode, scrape_date, started_at, finished_at, window_from, "
+                "window_to, machine, git_commit, file_name, totals, raw) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(run_id) DO NOTHING",
+                (run["run_id"], run["mode"], run["scrape_date"], run["started_at"], run["finished_at"],
+                 run["window_from"], run["window_to"], run["machine"], run["git_commit"], run["file_name"],
+                 Jsonb(run["totals"]), Jsonb(parsed["raw"])))
+            async with self.conn.cursor() as cur:
+                if parsed["hosts"]:
+                    await cur.executemany(
+                        "INSERT INTO block_log_hosts(run_id, host, source, client, requests, ok, blocked, errors, "
+                        "skipped, blocks, statuses, first_block_seq, stopped) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                        [(run["run_id"], h["host"], h["source"], h["client"], h["requests"], h["ok"], h["blocked"],
+                          h["errors"], h["skipped"], Jsonb(h["blocks"]), Jsonb(h["statuses"]),
+                          h["first_block_seq"], h["stopped"]) for h in parsed["hosts"]])
+                if parsed["events"]:
+                    cols = list(parsed["events"][0])
+                    await cur.executemany(
+                        f"INSERT INTO block_log_events({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
+                        [tuple(_or_none(e[c]) for c in cols) for e in parsed["events"]])
 
     async def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame:
         async with self.conn.cursor() as cur:

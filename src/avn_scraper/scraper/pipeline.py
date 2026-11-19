@@ -24,6 +24,7 @@ from .discover.catchall import discover_catchall
 from .discover.sources import EndpointCache, ListingMemory, discover_source
 from .export import export_all
 from .extract import Extracted, extract
+from .blocklog import BlockLog, sync_to_db
 from .fetch import Fetcher
 from .geo import detect_districts
 from .normalize import detect_language
@@ -94,7 +95,7 @@ async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | N
     adapter = find_adapter(c.url)
     if adapter is not None:
         site, api_url = adapter
-        resp = await fetcher.get(api_url)
+        resp = await fetcher.get(api_url, "api")
         if resp is None:
             fetcher.failures[c.url] = fetcher.failures.get(api_url, "network_error")
             return c, None, None
@@ -105,7 +106,7 @@ async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | N
             fetcher.failures[c.url] = "adapter_error"
             return c, None, None
 
-    resp = await fetcher.get(c.url)
+    resp = await fetcher.get(c.url, "article")
     if resp is None:
         return c, None, None
     if "html" not in resp.headers.get("content-type", "html"):
@@ -165,8 +166,11 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
                                     int(s.get("endpoint_cache_days", 7)))
     memory = await asyncio.to_thread(ListingMemory, cfg.data_dir / "cache" / "listing_seen.json")
 
+    block_log = BlockLog.for_run(cfg.block_log_dir, run_id, "dry-run" if opts.dry_run else "run", cfg.timezone)
+    block_log.window = (cutoff, started)
+    stats["block_log"] = str(block_log.path)
     async with Fetcher(s.get("http") or {}, transport=transport, sources=cfg.sources,
-                       cooldown_path=cfg.host_blocks_path) as fetcher:
+                       cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher:
         # 1. discover
         results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)
                                          for src in sources))
@@ -206,6 +210,10 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         stats["http"] = dict(fetcher.stats)
         if fetcher.stopped_hosts():
             stats["hosts_stopped"] = fetcher.stopped_hosts()
+        # Hosts that refused or failed us, kept in the run record (JSON file and Postgres).
+        troubled = {h: t for h, t in block_log.summary().items() if t["blocks"] or t["errors"] or t["stopped"]}
+        if troubled:
+            stats["blocks"] = troubled
         failures = dict(fetcher.failures)
 
     # 4. classify, cluster, store
@@ -321,6 +329,11 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     finished = datetime.now(timezone.utc)
     stats["finished_at"] = finished.isoformat(timespec="seconds")
     stats["duration_seconds"] = round((finished - started).total_seconds(), 1)
+    # Block logs (this run's file and any earlier one not imported yet) go to Postgres,
+    # dry runs included: they are a record of how sites treated us, not scraped data.
+    imported = await sync_to_db(storage, cfg.block_log_dir)
+    if imported:
+        log.info("block logs imported into Postgres: %s", ", ".join(imported))
     if not opts.dry_run:
         await storage.save_run(run_id, stats["started_at"], stats["finished_at"], stats)
         log_name = f"{started.astimezone(tz):%Y-%m-%d_%H%M%S}.json"

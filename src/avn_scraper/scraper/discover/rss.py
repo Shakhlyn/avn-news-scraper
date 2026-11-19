@@ -51,7 +51,7 @@ def looks_like_feed(content: bytes) -> bool:
 
 
 async def discover_feed(fetcher: Fetcher, url: str, source_id: str) -> list[Candidate]:
-    resp = await fetcher.get(url)
+    resp = await fetcher.get(url, "feed")
     if resp is None or not looks_like_feed(resp.content):
         return []
     return await asyncio.to_thread(parse_feed, resp.content, source_id)

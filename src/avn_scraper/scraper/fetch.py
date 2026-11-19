@@ -43,6 +43,8 @@ import httpx
 from curl_cffi.curl import CurlError
 from curl_cffi.requests import AsyncSession
 
+from .blocklog import BlockLog
+
 log = logging.getLogger(__name__)
 
 _DROP_HEADERS = ("content-encoding", "content-length", "transfer-encoding")
@@ -52,6 +54,7 @@ _MAX_REDIRECTS = 10
 _CHALLENGE_TITLE = re.compile(rb"<title[^>]*>\s*(just a moment|attention required|bot verification"
                               rb"|access denied|checking your browser)", re.I)
 _CHALLENGE_MAX_BYTES = 40_000
+_TITLE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
 class BlockedURL(Exception):
@@ -87,6 +90,21 @@ def block_kind(resp: httpx.Response) -> str | None:
     if resp.status_code == 403:
         return "forbidden"
     return None
+
+
+def _page_title(body: bytes) -> str | None:
+    m = _TITLE.search(body[:20_000])
+    return m.group(1).decode("utf-8", "replace").strip()[:120] if m else None
+
+
+def _blocker_headers(resp: httpx.Response) -> dict[str, str]:
+    """Headers that say who answered and why, for the block log."""
+    h = resp.headers
+    out = {k.replace("-", "_"): h[k] for k in ("server", "cf-ray", "cf-mitigated", "cf-cache-status",
+                                              "retry-after", "content-type", "x-cache", "via") if k in h}
+    if "cf_ray" in out and "-" in out["cf_ray"]:
+        out["cf_colo"] = out["cf_ray"].rsplit("-", 1)[1]  # Cloudflare data centre, e.g. DAC = Dhaka
+    return out
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
@@ -146,8 +164,11 @@ class HostCooldowns:
 class Fetcher:
     def __init__(self, http_settings: dict, transport: httpx.AsyncBaseTransport | None = None, *,
                  sources: Iterable[Any] = (), cooldown_path: Path | None = None,
-                 curl_session: Any = None):
+                 curl_session: Any = None, block_log: BlockLog | None = None):
         s = http_settings
+        self._http_settings = dict(s)
+        self.block_log = block_log
+        self._sources = [(_site_key(urlsplit(src.homepage).hostname or ""), src) for src in sources]
         self.user_agent = s.get("user_agent", "AVNNewsScraper/0.1")
         self.robots_agent = s.get("robots_agent", "AVNNewsScraper")
         self.per_host_delay = float(s.get("per_host_delay", 1.0))
@@ -189,6 +210,8 @@ class Fetcher:
         self.cooldowns = HostCooldowns(cooldown_path)
         self.stats: Counter[str] = Counter()
         self.failures: dict[str, str] = {}  # url -> reason, for the run log
+        self._host_seq: Counter[str] = Counter()  # requests sent per host this run
+        self._host_done: dict[str, float] = {}  # when the last request to the host finished
 
     async def __aenter__(self) -> Fetcher:
         await asyncio.to_thread(self.cooldowns.load)
@@ -199,12 +222,30 @@ class Fetcher:
             # trust_env=False: an environment proxy would hide the real peer address.
             self._curl = AsyncSession(impersonate=self.impersonate, timeout=self.timeout, trust_env=False)
             self._own_curl = True
+        if self.block_log:
+            await self.block_log.start(
+                http_settings=self._http_settings, cooldowns=dict(self.cooldowns.entries),
+                sources=[{"id": src.id, "host": key, "fetch": getattr(src, "fetch", "plain"),
+                          "enabled": getattr(src, "enabled", True)} for key, src in self._sources])
         return self
 
     async def __aexit__(self, *exc) -> None:
+        if self.block_log:
+            await self.block_log.finish()
         await self._client.aclose()
         if self._own_curl:
             await self._curl.close()
+
+    def source_for(self, host: str) -> str | None:
+        key = _site_key(host)
+        return next((src.id for site, src in self._sources if key == site or key.endswith("." + site)), None)
+
+    def _tally(self, host: str, hostname: str, impersonate: bool):
+        tally = self.block_log.hosts[host]
+        if tally.source is None:
+            tally.source = self.source_for(hostname)
+            tally.client = self.impersonate if impersonate else "plain"
+        return tally
 
     def uses_impersonation(self, host: str) -> bool:
         key = _site_key(host)
@@ -325,7 +366,7 @@ class Fetcher:
         async with self._robots_locks[origin]:
             if origin not in self._robots:
                 parser: RobotFileParser | None = None
-                resp = await self._request(f"{origin}/robots.txt")
+                resp = await self._request(f"{origin}/robots.txt", "robots")
                 if resp is not None and resp.status_code == 200:
                     parser = RobotFileParser()
                     parser.parse(resp.text.splitlines())
@@ -343,17 +384,21 @@ class Fetcher:
         return parser is None or parser.can_fetch(self.robots_agent, url)
 
     def _is_stopped(self, host: str, url: str) -> bool:
-        if host in self._stopped or self.cooldowns.until(host):
+        stopped = "stopped_this_run" if host in self._stopped else "cooldown" if self.cooldowns.until(host) else None
+        if stopped:
             self.stats["host_blocked"] += 1
             self.failures[url] = "host_blocked"
-            return True
-        return False
+            if self.block_log:
+                self.block_log.skip(host, stopped)
+        return bool(stopped)
 
     async def _stop_host(self, host: str, reason: str) -> None:
         if host in self._stopped:
             return
         self._stopped[host] = reason
         self.cooldowns.add(host, reason, self.cooldown_hours)
+        if self.block_log:
+            self.block_log.host_stopped(host, reason, self.cooldowns.until(host), self._strikes[host])
         log.warning("%s keeps refusing us (%s): no more requests to it this run, and none for %g h "
                     "(delete it from %s to retry sooner)", host, reason, self.cooldown_hours, self.cooldowns.path)
         await asyncio.to_thread(self.cooldowns.save)
@@ -364,19 +409,26 @@ class Fetcher:
         if self._strikes[host] >= self.block_threshold:
             await self._stop_host(host, f"{self._strikes[host]} block answers in a row, last: {kind} on {url}")
 
-    async def _request(self, url: str) -> httpx.Response | None:
+    async def _request(self, url: str, purpose: str = "page") -> httpx.Response | None:
         parts = urlsplit(url)
         host = parts.netloc
         impersonate = self.uses_impersonation(parts.hostname or "")
         delay = max(self.per_host_delay, self.impersonate_delay) if impersonate else self.per_host_delay
+        if self.block_log:
+            self._tally(host, parts.hostname or "", impersonate)
         resp: httpx.Response | None = None
         for attempt in range(self.retries + 1):
+            error: str | None = None
+            unsafe = False
             async with self._host_locks[host]:
                 if self._is_stopped(host, url):
                     return None
-                wait = self._host_last.get(host, 0) + delay * (1 + random.uniform(0, self.jitter)) - time.monotonic()
+                queued = time.monotonic()
+                wait = self._host_last.get(host, 0) + delay * (1 + random.uniform(0, self.jitter)) - queued
                 if wait > 0:
                     await asyncio.sleep(wait)
+                sent = time.monotonic()
+                self._host_seq[host] += 1
                 try:
                     async with self._sem:
                         resp = await (self._get_impersonated(url) if impersonate else self._get_capped(url))
@@ -384,13 +436,21 @@ class Fetcher:
                     self.stats[type(exc).__name__] += 1
                     self.failures[url] = type(exc).__name__
                     log.warning("not fetching %s: %s", url, exc)
-                    return None
+                    resp, unsafe, error = None, True, type(exc).__name__
                 except (httpx.HTTPError, CurlError) as exc:
                     resp = None
+                    error = f"{type(exc).__name__}: {str(exc)[:200]}"
                     log.debug("fetch error %s: %r", url, exc)
                 finally:
                     self._host_last[host] = time.monotonic()
+                    previous = self._host_done.get(host)
+                    self._host_done[host] = self._host_last[host]
             kind = block_kind(resp) if resp is not None else None
+            if self.block_log:
+                await self._log_attempt(host, url, purpose, attempt, resp, kind, error, unsafe,
+                                        sent, queued, previous)
+            if unsafe:
+                return None
             if kind:
                 await self._note_block(host, kind, url)
                 if host in self._stopped:
@@ -415,14 +475,51 @@ class Fetcher:
                 await asyncio.sleep(2 * (attempt + 1) + random.uniform(0, 1))
         return resp
 
-    async def get(self, url: str) -> httpx.Response | None:
-        """GET url; None when blocked by robots.txt, on network error, block or non-2xx status."""
+    async def _log_attempt(self, host: str, url: str, purpose: str, attempt: int, resp: httpx.Response | None,
+                           kind: str | None, error: str | None, unsafe: bool, sent: float, queued: float,
+                           previous: float | None) -> None:
+        """One block-log entry per attempt (the log keeps lines only for failures)."""
+        if unsafe:
+            outcome = "unsafe"
+        elif resp is None:
+            outcome = "error"
+        elif kind:
+            outcome = "block"
+        elif resp.status_code >= 500:
+            outcome = "server_error"
+        elif resp.status_code >= 400:
+            outcome = "client_error"
+        else:
+            outcome = "ok"
+        fields: dict[str, Any] = {
+            "url": url, "purpose": purpose, "attempt": attempt + 1, "host_seq": self._host_seq[host],
+            "gap_since_prev_s": round(sent - previous, 2) if previous is not None else None,
+            "waited_s": round(sent - queued, 2),
+            "elapsed_s": round(self._host_done[host] - sent, 2), "error": error,
+        }
+        if resp is not None:
+            fields.update(status=resp.status_code, bytes=len(resp.content), headers=_blocker_headers(resp))
+            if str(resp.url) != url:
+                fields["final_url"] = str(resp.url)
+        if kind:
+            fields.update(block=kind, strikes=self._strikes[host] + 1, title=_page_title(resp.content),
+                          sample=await self.block_log.save_sample(host, url, resp.status_code, resp.content))
+        self.block_log.request(host, outcome, **fields)
+        await self.block_log.maybe_flush()
+
+    async def get(self, url: str, purpose: str = "page") -> httpx.Response | None:
+        """GET url; None when blocked by robots.txt, on network error, block or non-2xx status.
+
+        `purpose` (homepage, tab, feed, sitemap, article, api, search) only labels the block log.
+        """
         if not await self.allowed(url):
             self.stats["robots_blocked"] += 1
             self.failures[url] = "robots_blocked"
             log.info("robots.txt disallows %s", url)
+            if self.block_log:
+                self.block_log.skip(urlsplit(url).netloc, "robots")
             return None
-        resp = await self._request(url)
+        resp = await self._request(url, purpose)
         if resp is None:
             if self.failures.get(url) != "host_blocked":
                 self.stats["errors"] += 1

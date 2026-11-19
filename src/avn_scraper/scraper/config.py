@@ -62,6 +62,10 @@ class Config:
     def host_blocks_path(self) -> Path:
         return self.data_dir / "cache" / "host_blocks.json"
 
+    @property
+    def block_log_dir(self) -> Path:
+        return self.data_dir / "logs" / "blocks"
+
     def source(self, source_id: str) -> Source | None:
         return next((s for s in self.sources if s.id == source_id), None)
 

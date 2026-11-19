@@ -94,7 +94,7 @@ def _pick_children(children: list[tuple[str, datetime | None]], cutoff: datetime
 
 async def discover_sitemap(fetcher: Fetcher, url: str, source_id: str, cutoff: datetime,
                            _depth: int = 0) -> list[Candidate]:
-    resp = await fetcher.get(url)
+    resp = await fetcher.get(url, "sitemap")
     if resp is None:
         return []
     try:

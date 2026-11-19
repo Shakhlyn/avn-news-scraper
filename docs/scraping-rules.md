@@ -109,6 +109,26 @@ A banned IP also stops every later test, so the scraper backs off before a site 
   apply, and `robots.txt` is still read as `AVNNewsScraper`.
 - Outlets whose blocks a fingerprint doesn't fix are `enabled: false`, with the reason as
   a comment in `sources.yaml`.
+- **Block log (permanent):** successful requests are only counted. Each scrape (run,
+  dry run, `check-sources`) writes, in a folder named after the scrape's day in Asia/Dhaka:
+  - `data/logs/blocks/2026-11-18/085935_run.jsonl`: the complete record. It holds
+    `run_start` (window, machine, git commit, settings), one `request` line per block,
+    timeout/connection error or 5xx, `host_stopped` when the breaker trips, and a
+    `run_end` per-host summary;
+  - `085935_run_events.parquet`: one typed row per failure, and
+    `085935_run_hosts.parquet`: one row per host (requests, ok, blocked, block_rate). Parquet
+    is the analysis format: columnar, typed and compressed. DuckDB, pandas and Polars read all
+    runs at once, e.g. `SELECT host, block, count(*) FROM 'data/logs/blocks/*/*_events.parquet'
+    GROUP BY ALL`;
+  - `085935_run/blocked/`: the first 2 block pages per host.
+
+  The time in the name is the start time in Dhaka, as in `data/logs/runs/2026-11-18_085935.json`.
+  Every line also has `scrape_date` and `run_id` (UTC start). Nothing is written to Postgres
+  during a scrape. At its end, every finished file not yet imported goes in, in one
+  transaction: `block_log_runs` gets the whole file in `raw`, `block_log_hosts` gets the
+  per-host summary, and `block_log_events` gets one row per failure (the table to analyse).
+  If Postgres is down, the next scrape or `avn sync-block-logs` imports it. Files are never
+  deleted. `avn block-report [--days N] [--host H]` summarises the files.
 - To diagnose a site, probe it with a handful of spaced requests, never a crawl: a 403 with
   `cf-mitigated: challenge` means try `fetch: impersonate`; a challenge even then needs a
   real browser (not built); a timeout or 403 only from one machine means an IP block.

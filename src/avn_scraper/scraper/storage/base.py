@@ -46,4 +46,12 @@ class Storage(ABC):
         """When the last finished run over all outlets started."""
 
     @abstractmethod
+    async def known_block_logs(self) -> set[str]:
+        """Run ids whose block log is already imported."""
+
+    @abstractmethod
+    async def save_block_log(self, parsed: dict[str, Any]) -> None:
+        """Store one parsed block-log file (blocklog.parse_file) in one transaction."""
+
+    @abstractmethod
     async def query_df(self, sql: str, params: tuple = ()) -> pd.DataFrame: ...

@@ -249,3 +249,194 @@ def test_other_hosts_stay_on_plain_client():
     assert f.uses_impersonation("bangla.example-paper.com")
     assert not f.uses_impersonation("plain.com")
     assert not f.uses_impersonation("notexample-paper.com")
+
+
+# --- block log -----------------------------------------------------------------------------
+
+def _events(path):
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_block_log_keeps_failures_not_successes(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    from avn_scraper.scraper.blocklog import BlockLog
+    blog = BlockLog.for_run(tmp_path, "20261118T030000Z", "dry-run")
+    answers = iter([200, 200, 403, 200, 404])
+
+    def handler(request):
+        status = next(answers)
+        if status == 403:
+            return httpx.Response(403, headers={"cf-mitigated": "challenge", "cf-ray": "8abc-DAC", "server": "cloudflare"},
+                                  content=CHALLENGE)
+        return httpx.Response(status, content=b"<html>page</html>")
+
+    src = SimpleNamespace(id="paper", homepage="https://93.184.216.34/", fetch="plain")
+
+    async def go(f):
+        for i in range(5):
+            await f.get(f"https://93.184.216.34/{i}", "article")
+    _run(go, handler, sources=[src], block_log=blog)
+
+    path = tmp_path / "2026-11-18" / "090000_dry-run.jsonl"  # 03:00 UTC = 09:00 in Dhaka
+    assert blog.path == path
+    events = _events(path)
+    assert [e["event"] for e in events] == ["run_start", "request", "run_end"]
+    block = events[1]
+    assert block["outcome"] == "block" and block["block"] == "challenge"
+    assert block["source"] == "paper" and block["purpose"] == "article"
+    assert block["host_seq"] == 3 and block["ok_before"] == 2 and block["blocks_before"] == 0
+    assert block["headers"]["cf_colo"] == "DAC" and block["title"] == "Just a moment..."
+    assert (path.with_suffix("") / "blocked" / block["sample"]).exists()
+    host = events[2]["hosts"]["93.184.216.34"]
+    assert host["requests"] == 5 and host["ok"] == 3 and host["blocks"] == {"challenge": 1}
+    assert host["first_block_seq"] == 3 and host["statuses"]["404"] == 1
+    assert events[0]["sources"][0]["id"] == "paper"
+    assert all(e["scrape_date"] == "2026-11-18" for e in events)
+    import datetime as dt
+
+    import pyarrow.parquet as pq
+    table = pq.read_table(blog.events_path)
+    rows = table.to_pylist()
+    assert len(rows) == 1 and rows[0]["block"] == "challenge" and rows[0]["cf_colo"] == "DAC"
+    assert rows[0]["scrape_date"] == dt.date(2026, 11, 18) and rows[0]["purpose"] == "article"
+    assert rows[0]["status"] == 403 and rows[0]["host_seq"] == 3 and rows[0]["ts"].tzinfo is not None
+    hosts = pq.read_table(blog.hosts_path).to_pylist()
+    assert hosts[0]["requests"] == 5 and hosts[0]["challenge"] == 1 and abs(hosts[0]["block_rate"] - 0.2) < 1e-6
+
+
+def test_block_log_records_stop_and_skips(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    from avn_scraper.scraper.blocklog import BlockLog
+    blog = BlockLog.for_run(tmp_path, "20261118T030000Z", "run")
+
+    async def go(f):
+        for i in range(5):
+            await f.get(f"https://93.184.216.34/{i}")
+    _run(go, lambda r: httpx.Response(429), block_log=blog, cooldown_path=tmp_path / "b.json")
+    events = _events(blog.path)
+    kinds = [e["event"] for e in events]
+    assert kinds.count("request") == 3 and kinds.count("host_stopped") == 1
+    stop = next(e for e in events if e["event"] == "host_stopped")
+    assert stop["strikes"] == 3 and stop["until"]
+    end = events[-1]
+    assert end["event"] == "run_end" and end["hosts"]["93.184.216.34"]["skipped"] == {"stopped_this_run": 2}
+    assert end["totals"]["hosts_stopped"] == 1
+
+
+def test_block_log_records_network_errors(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    from avn_scraper.scraper.blocklog import BlockLog
+    blog = BlockLog.for_run(tmp_path, "20261118T030000Z", "run")
+
+    def handler(request):
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    _run(lambda f: f.get("https://93.184.216.34/x"), handler, block_log=blog)
+    req = [e for e in _events(blog.path) if e["event"] == "request"]
+    assert len(req) == 1 and req[0]["outcome"] == "error" and req[0]["error"].startswith("ConnectTimeout")
+
+
+def test_block_report_reads_the_logs(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    import shutil
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from avn_scraper.cli import app
+    from avn_scraper.scraper.blocklog import BlockLog
+    from avn_scraper.scraper.config import DEFAULT_CONFIG_DIR
+
+    cfg_dir = tmp_path / "config"
+    shutil.copytree(DEFAULT_CONFIG_DIR, cfg_dir)
+    settings = (cfg_dir / "settings.yaml").read_text().replace("data_dir: data", f"data_dir: {tmp_path / 'data'}")
+    (cfg_dir / "settings.yaml").write_text(settings)
+    from datetime import datetime, timezone
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    blog = BlockLog.for_run(tmp_path / "data" / "logs" / "blocks", run_id, "run")
+    _run(lambda f: f.get("https://93.184.216.34/x", "tab"),
+         lambda r: httpx.Response(403, headers={"cf-mitigated": "challenge"}, content=CHALLENGE), block_log=blog)
+    monkeypatch.setenv("COLUMNS", "220")
+    result = CliRunner().invoke(app, ["block-report", "--config", str(cfg_dir)])
+    assert result.exit_code == 0, result.output
+    assert "93.184.216.34" in result.output and "challenge" in result.output and "tab" in result.output
+    assert Path(blog.path).exists()
+
+
+def test_scrape_date_is_the_dhaka_day(tmp_path):
+    from avn_scraper.scraper.blocklog import BlockLog
+    late = BlockLog.for_run(tmp_path, "20261117T200000Z", "run")  # 02:00 on the 18th in Dhaka
+    assert late.path == tmp_path / "2026-11-18" / "020000_run.jsonl" and late.scrape_date == "2026-11-18"
+
+
+def _write_finished_log(tmp_path, monkeypatch, run_id="20261118T030000Z"):
+    from avn_scraper.scraper.blocklog import BlockLog
+    blog = BlockLog.for_run(tmp_path, run_id, "run")
+
+    async def go(f):
+        for i in range(4):
+            await f.get(f"https://93.184.216.34/{i}", "tab")
+    _run(go, lambda r: httpx.Response(403, headers={"cf-mitigated": "challenge"}, content=CHALLENGE),
+         block_log=blog, cooldown_path=tmp_path / "b.json")
+    return blog
+
+
+def test_parse_file_waits_for_a_running_scrape(tmp_path):
+    from avn_scraper.scraper.blocklog import parse_file
+    path = tmp_path / "2026-11-18" / "090000_run.jsonl"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"event": "run_start", "run_id": "20261118T030000Z", "mode": "run",
+                                "ts": "2026-11-18T03:00:00+00:00"}) + "\n")
+    assert parse_file(path, tmp_path) is None  # no run_end yet and fresh
+
+
+def test_block_logs_imported_into_postgres_once(tmp_path, monkeypatch, database):
+    _no_sleep(monkeypatch)
+    from avn_scraper.scraper.blocklog import sync_to_db
+    from avn_scraper.scraper.storage import PostgresStorage
+    blog = _write_finished_log(tmp_path, monkeypatch)
+
+    async def go():
+        storage = await PostgresStorage.open(tmp_path)
+        try:
+            first = await sync_to_db(storage, tmp_path)
+            second = await sync_to_db(storage, tmp_path)
+            run = (await storage.query_df("SELECT * FROM block_log_runs")).iloc[0]
+            hosts = await storage.query_df("SELECT * FROM block_log_hosts")
+            events = await storage.query_df("SELECT * FROM block_log_events ORDER BY id")
+            return first, second, run, hosts, events
+        finally:
+            await storage.close()
+    first, second, run, hosts, events = asyncio.run(go())
+    assert first == ["20261118T030000Z"] and second == []
+    assert str(run["scrape_date"]) == "2026-11-18" and run["file_name"] == "2026-11-18/090000_run.jsonl"
+    assert run["raw"][0]["event"] == "run_start" and run["raw"][-1]["event"] == "run_end"
+    assert hosts.iloc[0]["blocked"] == 3 and hosts.iloc[0]["stopped"]
+    assert list(events["event"]) == ["request", "request", "request", "host_stopped"]
+    assert events.iloc[0]["purpose"] == "tab" and events.iloc[0]["status"] == 403
+    import pyarrow.parquet as pq
+    assert len(events) == pq.read_metadata(blog.events_path).num_rows
+
+
+def test_parquet_files_read_together_across_runs(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    import pyarrow.dataset as ds
+    _write_finished_log(tmp_path, monkeypatch, "20261117T030000Z")
+    _write_finished_log(tmp_path / "b", monkeypatch, "20261118T030000Z")  # separate cooldown file
+    for p in (tmp_path / "b").glob("2026-11-18"):
+        p.rename(tmp_path / "2026-11-18")
+    table = ds.dataset(sorted(map(str, tmp_path.glob("*/*_events.parquet")))).to_table()
+    assert table.num_rows == 8 and set(table.column("scrape_date").to_pylist()) == {
+        __import__("datetime").date(2026, 11, 17), __import__("datetime").date(2026, 11, 18)}
+
+
+def test_run_without_failures_still_writes_typed_files(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    import pyarrow.parquet as pq
+    from avn_scraper.scraper.blocklog import EVENTS_SCHEMA, BlockLog
+    blog = BlockLog.for_run(tmp_path, "20261118T030000Z", "check-sources")
+    _run(lambda f: f.get("https://93.184.216.34/x"), lambda r: httpx.Response(200, content=b"<html>ok</html>"),
+         block_log=blog)
+    events = pq.read_table(blog.events_path)
+    assert events.num_rows == 0 and events.schema.equals(EVENTS_SCHEMA)
+    assert pq.read_table(blog.hosts_path).to_pylist()[0]["ok"] == 1

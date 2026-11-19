@@ -22,6 +22,7 @@ from .scraper.classify import Classifier
 from .scraper.config import load_config
 from .scraper.discover.sources import EndpointCache, ListingMemory, discover_source
 from .scraper.export import export_all
+from .scraper.blocklog import BlockLog, read_events, sync_to_db
 from .scraper.fetch import Fetcher
 from .scraper.lock import RunInProgress, run_lock
 from .scraper.pipeline import RunOptions, reclassify, run_pipeline
@@ -113,6 +114,94 @@ def run(
         console.print(table)
 
 
+async def _sync_block_logs(cfg, quiet: bool = False) -> list[str]:
+    """Import finished block-log files not yet in Postgres. quiet: skip silently when it is down."""
+    try:
+        storage = await PostgresStorage.open(cfg.data_dir)
+    except DatabaseUnavailable as exc:
+        if not quiet:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+        console.print("[yellow]Postgres not reachable; block logs stay in files and are imported next time.[/]")
+        return []
+    try:
+        return await sync_to_db(storage, cfg.block_log_dir)
+    finally:
+        await storage.close()
+
+
+@app.command("sync-block-logs")
+def sync_block_logs(config: Optional[Path] = ConfigOpt) -> None:
+    """Import finished block logs (data/logs/blocks) not yet in Postgres. Scrapes do this at the end."""
+    cfg = load_config(config)
+    imported = asyncio.run(_sync_block_logs(cfg))
+    console.print(f"Imported {len(imported)} block log(s)" + (f": {', '.join(imported)}" if imported else ""))
+
+
+@app.command("block-report")
+def block_report(
+    days: int = typer.Option(30, help="Look at runs from the last N days"),
+    host: Optional[str] = typer.Option(None, help="Only this host (e.g. www.kalbela.com)"),
+    config: Optional[Path] = ConfigOpt,
+) -> None:
+    """Summarise the block logs (data/logs/blocks): who blocks us, how, and after how many requests."""
+    cfg = load_config(config)
+    since = (datetime.now(ZoneInfo(cfg.timezone)) - timedelta(days=days)).date()
+    events = read_events(cfg.block_log_dir, since)
+    if host:
+        events = [e for e in events if e.get("host") == host or e.get("event") in ("run_start", "run_end")]
+    runs = [e for e in events if e["event"] == "run_end"]
+    if not runs:
+        console.print(f"No block logs in {cfg.block_log_dir} for the last {days} days.")
+        return
+    per: dict[str, dict] = {}
+    for run in runs:
+        for h, t in run["hosts"].items():
+            if host and h != host:
+                continue
+            p = per.setdefault(h, {"source": t["source"], "client": t["client"], "runs": 0, "requests": 0, "ok": 0,
+                                   "blocks": Counter(), "errors": 0, "stopped": 0, "first": []})
+            p["runs"] += 1
+            p["requests"] += t["requests"]
+            p["ok"] += t["ok"]
+            p["blocks"].update(t["blocks"])
+            p["errors"] += t["errors"]
+            p["stopped"] += bool(t["stopped"])
+            if t["first_block_seq"]:
+                p["first"].append(t["first_block_seq"])
+    modes = Counter(r["mode"] for r in runs)
+    console.print(f"{len(runs)} runs in the last {days} days: {dict(modes)}")
+    table = Table("host", "source", "client", "runs", "requests", "blocked", "block %", "errors", "stopped",
+                  "1st block at req #", title="Per host (hosts with blocks or errors)")
+    troubled = {h: p for h, p in per.items() if p["blocks"] or p["errors"] or p["stopped"]}
+    for h, p in sorted(troubled.items(), key=lambda kv: -sum(kv[1]["blocks"].values())):
+        blocked = sum(p["blocks"].values())
+        first = sorted(p["first"])
+        table.add_row(h, p["source"] or "-", p["client"], str(p["runs"]), str(p["requests"]),
+                      ", ".join(f"{k} {v}" for k, v in p["blocks"].items()) or "0",
+                      f"{100 * blocked / max(p['requests'], 1):.1f}", str(p["errors"]), str(p["stopped"]),
+                      f"median {first[len(first) // 2]}, min {first[0]}" if first else "-")
+    console.print(table if troubled else "No blocks or errors.")
+    fails = [e for e in events if e["event"] == "request"]
+    if fails:
+        groups = Counter((e["host"], e.get("purpose"), e["outcome"], e.get("block") or e.get("error", "")[:30],
+                          str(e.get("status", "-")), (e.get("title") or "")[:30]) for e in fails)
+        table = Table("count", "host", "purpose", "outcome", "kind / error", "status", "page title",
+                      title="Failed requests by kind")
+        for key, n in groups.most_common(25):
+            table.add_row(str(n), *key)
+        console.print(table)
+        tz = ZoneInfo(cfg.timezone)
+        hours = Counter(datetime.fromisoformat(e["ts"]).astimezone(tz).hour for e in fails if e["outcome"] == "block")
+        if hours:
+            console.print("Blocks by hour (" + cfg.timezone + "): "
+                          + "  ".join(f"{h:02d}h:{n}" for h, n in sorted(hours.items())))
+    stops = [e for e in events if e["event"] == "host_stopped"]
+    for e in stops[-10:]:
+        console.print(f"[red]{e['ts'][:16]} stopped {e['host']}[/] after {e['requests_so_far']} requests "
+                      f"({e['ok_so_far']} ok): {e['reason']}")
+
+
 @app.command("check-sources")
 def check_sources(
     sources: Optional[str] = typer.Option(None, help="Comma separated source ids"),
@@ -132,9 +221,12 @@ def check_sources(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(cfg.settings.get("window_hours", 24)))
     memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")  # read only: never saved here
 
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    block_log = BlockLog.for_run(cfg.block_log_dir, run_id, "check-sources", cfg.timezone)
+
     async def go():
         async with Fetcher(cfg.settings.get("http") or {}, sources=cfg.sources,
-                           cooldown_path=cfg.host_blocks_path) as fetcher:
+                           cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher:
             found = await asyncio.gather(*(discover_source(fetcher, s, cutoff, cache, cfg.settings.get("sections"), memory)
                                            for s in selected))
             return found, fetcher.stopped_hosts(), dict(fetcher.stats)
@@ -159,6 +251,10 @@ def check_sources(
         console.print(f"[yellow]Block answers: {blocks}[/]")
     for host, why in stopped.items():
         console.print(f"[red]Not fetched: {host}: {why}[/]")
+    console.print(f"Block log: {block_log.path}")
+    imported = asyncio.run(_sync_block_logs(cfg, quiet=True))
+    if imported:
+        console.print(f"Block logs imported into Postgres: {', '.join(imported)}")
 
 
 @app.command()

@@ -27,7 +27,7 @@ def unwrap_bing_link(link: str) -> str:
 async def discover_catchall(fetcher: Fetcher, queries: list[str]) -> list[Candidate]:
     out: list[Candidate] = []
     for q in queries:
-        resp = await fetcher.get(BING_URL.format(q=quote_plus(q)))
+        resp = await fetcher.get(BING_URL.format(q=quote_plus(q)), "search")
         if resp is None:
             continue
         for c in await asyncio.to_thread(parse_feed, resp.content, source_id=""):

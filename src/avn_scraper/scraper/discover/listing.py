@@ -49,7 +49,7 @@ def find_feed_links(html: str, page_url: str) -> list[str]:
 
 async def discover_listing(fetcher: Fetcher, url: str, homepage: str, source_id: str) -> tuple[list[Candidate], str]:
     """Return (candidates, html) so the caller can reuse the page for feed discovery."""
-    resp = await fetcher.get(url)
+    resp = await fetcher.get(url, "homepage" if url == homepage else "tab")
     if resp is None:
         return [], ""
     return await asyncio.to_thread(parse_listing, resp.text, str(resp.url), homepage, source_id), resp.text
