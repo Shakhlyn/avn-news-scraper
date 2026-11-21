@@ -95,3 +95,176 @@ sources:
   - {id: purbanchal, name: Dainik Purbanchal, language: bn, type: regional, district: Khulna, homepage: "https://www.purbanchal.com/"}
   - {id: sylheterdak, name: Sylheter Dak, language: bn, type: regional, district: Sylhet, homepage: "https://sylheterdak.com.bd/"}
   - {id: coxsbazarnews, name: Cox's Bazar News, language: bn, type: regional, district: Cox's Bazar, homepage: "https://www.coxsbazarnews.com/"}
+
+  # ---------- Local: Barishal division ----------
+  - {id: dainikdokkhin, name: "Dainik Dokkhin", language: bn, type: regional, district: Barishal, homepage: "https://dainikdokkhin.com/"}
+  - {id: amarbarishal24, name: "Amar Barishal 24", language: bn, type: regional, district: Barishal, homepage: "https://amarbarishal24.com/"}
+  - {id: barishaltimes, name: "Barishal Times", language: bn, type: regional, district: Barishal, homepage: "https://barishaltimes.com/"}
+  - {id: dailymatobad, name: "Daily Matobad", language: bn, type: regional, district: Barishal, homepage: "https://dailymatobad.com/"}
+  - {id: barisaltoday, name: "Barisal Today", language: bn, type: regional, district: Barishal, homepage: "https://barisaltoday.com/"}
+  - {id: amaderbarisal, name: "Amader Barishal", language: bn, type: regional, district: Barishal, homepage: "https://www.amaderbarisal.com/"}
+  - {id: barishalpost, name: "Barishal Post", language: bn, type: regional, district: Barishal, homepage: "https://barishalpostnews.com/"}
+  - {id: bholarbani, name: "Dainik Bholar Bani", language: bn, type: regional, district: Bhola, homepage: "https://bholarbani.com/"}
+  - {id: ajkerbhola, name: "Ajker Bhola", language: bn, type: regional, district: Bhola, homepage: "https://www.ajkerbhola.com/"}
+  - {id: bholanews, name: "Bhola News", language: bn, type: regional, district: Bhola, homepage: "https://bholanews.com/"}
+  - {id: bholarkhobor, name: "Bholar Khobor", language: bn, type: regional, district: Bhola, homepage: "https://www.bholarkhobor.com/"}
+  - {id: channelbhola, name: "Channel Bhola", language: bn, type: regional, district: Bhola, homepage: "https://channelbhola.com/"}
+  - {id: amaderpatuakhali, name: "Dainik Amader Patuakhali", language: bn, type: regional, district: Patuakhali, homepage: "https://dailyamaderpatuakhali.com/"}
+  - {id: khaborpatuakhali, name: "Khabor Patuakhali", language: bn, type: regional, district: Patuakhali, homepage: "https://khaborpatuakhali.com/"}
+  - {id: kuakatanews, name: "Kuakata News", language: bn, type: regional, district: Patuakhali, homepage: "https://www.kuakatanews.com.bd/"}
+  - {id: pirojpurkantho, name: "Pirojpur Kantho", language: bn, type: regional, district: Pirojpur, homepage: "https://pirojpurkantho.com/"}
+
+  # ---------- Local: Chattogram division ----------
+  - {id: brahmanbaria24, name: "Brahmanbaria24", language: bn, type: regional, district: Brahmanbaria, homepage: "https://brahmanbaria24.com/"}
+  - {id: chandpurtimes, name: "Chandpur Times", language: bn, type: regional, district: Chandpur, homepage: "https://chandpurtimes.com/"}
+  - {id: chandpurkhobor, name: "Daily Chandpur Khobor", language: bn, type: regional, district: Chandpur, homepage: "https://chandpurkhobor.com/"}
+  - {id: suprobhat, name: "Suprobhat Bangladesh", language: bn, type: regional, district: Chattogram, homepage: "https://suprobhat.com/"}
+  - {id: ctgpratidin, name: "Chattogram Pratidin", language: bn, type: regional, district: Chattogram, homepage: "https://ctgpratidin.com/"}
+  - {id: comillarkagoj, name: "Daily Comillar Kagoj", language: bn, type: regional, district: Cumilla, homepage: "https://www.comillarkagoj.com/"}
+  - {id: dailycomillanews, name: "Daily Comilla News", language: bn, type: regional, district: Cumilla, homepage: "https://dailycomillanews.com/"}
+  - {id: cumillapress, name: "Cumilla Press", language: bn, type: regional, district: Cumilla, homepage: "https://cumillapress.com/"}
+  - {id: dainikcoxsbazar, name: "Dainik Cox's Bazar", language: bn, type: regional, district: "Cox's Bazar", homepage: "https://www.dainikcoxsbazar.com/"}
+  - {id: coxsbazarjournal, name: "Cox's Bazar Journal", language: bn, type: regional, district: "Cox's Bazar", homepage: "https://www.coxsbazarjournal.com/"}
+  - {id: coxsbazarkontho, name: "Cox's Bazar Kontho", language: bn, type: regional, district: "Cox's Bazar", homepage: "https://www.coxsbazarkontho.com/"}
+  - {id: lakshmipur24, name: "Lakshmipur24", language: bn, type: regional, district: Lakshmipur, homepage: "https://lakshmipur24.com/"}
+  - {id: noakhalirkatha, name: "Dainik Noakhalir Katha", language: bn, type: regional, district: Noakhali, homepage: "https://dailynoakhalirkatha.com/"}
+  - {id: noakhalibarta, name: "Dainik Noakhali Barta", language: bn, type: regional, district: Noakhali, homepage: "https://dainiknoakhalibarta.com/"}
+  - {id: noakhalitimes, name: "Noakhali Times", language: bn, type: regional, district: Noakhali, homepage: "https://noakhalitimes.com/"}
+  - {id: noakhalirkhobor, name: "Noakhalir Khobor", language: bn, type: regional, district: Noakhali, homepage: "https://www.noakhalirkhobor.com/"}
+  - {id: pahar24, name: "Pahar24", language: bn, type: regional, homepage: "https://pahar24.com/"}  # Chittagong Hill Tracts
+  - {id: parbattanews, name: "Parbatta News", language: bn, type: regional, homepage: "https://www.parbattanews.com/", fetch: impersonate}  # Chittagong Hill Tracts; Cloudflare challenge on Python TLS fingerprint (2026-11)
+  - {id: paharbarta, name: "Pahar Barta", language: bn, type: regional, homepage: "https://paharbarta.com/"}  # Chittagong Hill Tracts
+
+  # ---------- Local: Dhaka division ----------
+  - {id: savarsangbad, name: "Savar Sangbad", language: bn, type: regional, district: Dhaka, homepage: "https://savarsangbad.com/"}  # weekly
+  - {id: news39, name: "News39", language: bn, type: regional, district: Dhaka, homepage: "https://news39.net/"}
+  - {id: keraniganjnews, name: "Keraniganj News Portal", language: bn, type: regional, district: Dhaka, homepage: "https://keraniganjnewsportal.com/"}
+  - {id: dainikkumar, name: "Dainik Kumar", language: bn, type: regional, district: Faridpur, homepage: "https://doinikkumar.com/", enabled: false}  # 503 when added (2026-11)
+  - {id: faridpurprotidin, name: "Faridpur Protidin", language: bn, type: regional, district: Faridpur, homepage: "https://faridpurprotidin.com/"}
+  - {id: faridpurpost, name: "Faridpur Post", language: bn, type: regional, district: Faridpur, homepage: "https://faridpurpost.com/"}
+  - {id: faridpursomachar, name: "Faridpur Somachar", language: bn, type: regional, district: Faridpur, homepage: "https://faridpursomachar.com/"}
+  - {id: gazipurkontho, name: "Gazipur Kontho", language: bn, type: regional, district: Gazipur, homepage: "https://gazipurkontho.com.bd/"}
+  - {id: dailygazipur, name: "Daily Gazipur", language: bn, type: regional, district: Gazipur, homepage: "https://dailygazipur.com/"}
+  - {id: thedailygazipur, name: "The Daily Gazipur", language: bn, type: regional, district: Gazipur, homepage: "https://www.thedailygazipur.com/"}
+  - {id: bartamangopalganj, name: "Dainik Bartaman Gopalganj", language: bn, type: regional, district: Gopalganj, homepage: "https://bartamangopalganj.com/"}
+  - {id: kishoreganjnews, name: "Kishoreganj News", language: bn, type: regional, district: Kishoreganj, homepage: "https://kishoreganjnews.com/"}
+  - {id: bartabahok, name: "Bartabahok Kishoreganj", language: bn, type: regional, district: Kishoreganj, homepage: "https://bartabahokkishoreganj.com/"}
+  - {id: kishoreganjpress, name: "Kishoreganj Press", language: bn, type: regional, district: Kishoreganj, homepage: "https://kishoreganjpress.com/"}
+  - {id: madaripurakhon, name: "Madaripur Akhon News", language: bn, type: regional, district: Madaripur, homepage: "https://madaripurakhonnews.com/"}
+  - {id: rajoirnews, name: "Rajoir News", language: bn, type: regional, district: Madaripur, homepage: "https://www.rajoirnews.com/"}
+  - {id: narayanganjtimes, name: "Narayanganj Times", language: bn, type: regional, district: Narayanganj, homepage: "https://www.narayanganjtimes.com/"}
+  - {id: pressnarayanganj, name: "Press Narayanganj", language: bn, type: regional, district: Narayanganj, homepage: "https://www.pressnarayanganj24.net/"}
+  - {id: newsnarayanganj, name: "The News Narayanganj", language: bn, type: regional, district: Narayanganj, homepage: "https://www.newsnarayanganj24.com/"}
+  - {id: narayanganjerkagoj, name: "Narayanganjer Kagoj", language: bn, type: regional, district: Narayanganj, homepage: "https://narayanganjerkagoj.com/"}
+  - {id: narayanganjeralo, name: "Narayanganjer Alo 24", language: bn, type: regional, district: Narayanganj, homepage: "https://narayanganjeralo24.com/"}
+  - {id: narayanganjpost, name: "Narayanganj Post", language: bn, type: regional, district: Narayanganj, homepage: "https://www.narayanganjpost.com/"}
+  - {id: narayanganjpress, name: "Narayanganj Press", language: bn, type: regional, district: Narayanganj, homepage: "https://narayanganjpress.com/"}
+  - {id: rajbaribd, name: "Rajbari BD", language: bn, type: regional, district: Rajbari, homepage: "https://rajbaribd.com/"}
+  - {id: rajbariexpress, name: "Rajbari Express", language: bn, type: regional, district: Rajbari, homepage: "https://rajbariexpress.com/"}
+  - {id: tangailpratidin, name: "Tangail Pratidin", language: bn, type: regional, district: Tangail, homepage: "https://tangailpratidin.com/"}
+  - {id: newstangail, name: "News Tangail", language: bn, type: regional, district: Tangail, homepage: "https://www.newstangail.com/"}
+  - {id: tangailnewsbd, name: "Tangail News BD", language: bn, type: regional, district: Tangail, homepage: "https://tangailnewsbd.com/"}
+
+  # ---------- Local: Khulna division ----------
+  - {id: mathabhanga, name: "Dainik Mathabhanga", language: bn, type: regional, district: Chuadanga, homepage: "https://mathabhanga.com/"}
+  - {id: somoyersomikoron, name: "Daily Somoyer Somikoron", language: bn, type: regional, district: Chuadanga, homepage: "https://dailysomoyersomikoron.com/"}
+  - {id: chuadangatimes, name: "Chuadanga Times", language: bn, type: regional, district: Chuadanga, homepage: "https://chuadangatimes.com/"}
+  - {id: loksamaj, name: "Dainik Loksamaj", language: bn, type: regional, district: Jashore, homepage: "https://loksamaj.com/"}
+  - {id: ratdinnews, name: "Ratdin News", language: bn, type: regional, district: Jashore, homepage: "https://ratdinnews.net/"}
+  - {id: spandan, name: "Daily Spandan", language: bn, type: regional, district: Jashore, homepage: "https://edailyspandan.com/"}
+  - {id: dainikkalyan, name: "Dainik Kalyan", language: bn, type: regional, district: Jashore, homepage: "https://dainikkalyan.com/"}
+  - {id: dainikjessore, name: "Dainik Jessore", language: bn, type: regional, district: Jashore, homepage: "https://dainikjessore.com/"}
+  - {id: shornolata, name: "Shornolata News", language: bn, type: regional, district: Jashore, homepage: "https://shornolata.news/"}
+  - {id: projonmoekattor, name: "Dainik Projonmo Ekattor", language: bn, type: regional, district: Jashore, homepage: "https://projonmoekattor.com/"}
+  - {id: onenewsbd, name: "One News BD", language: bn, type: regional, district: Jashore, homepage: "https://www.onenewsbd.com/"}
+  - {id: probaha, name: "Dainik Probaha", language: bn, type: regional, district: Khulna, homepage: "https://dailyprobaha.com.bd/", sections: ["https://dailyprobaha.com.bd/article/e-paper"]}
+  - {id: khulnanchal, name: "Dainik Khulnanchal", language: bn, type: regional, district: Khulna, homepage: "https://khulnanchal.com/"}
+  - {id: janmobhumi, name: "Dainik Janmobhumi", language: bn, type: regional, district: Khulna, homepage: "https://dainikjanmobhumi.com/", sections: ["https://dainikjanmobhumi.com/newspaper"]}
+  - {id: dakhinanchal, name: "Dakhinanchal Protidin", language: bn, type: regional, district: Khulna, homepage: "https://dakhinanchal.com/", sections: ["https://dakhinanchal.com/%e0%a6%87-%e0%a6%aa%e0%a7%87%e0%a6%aa%e0%a6%be%e0%a6%b0"]}
+  - {id: khulnagazette, name: "Khulna Gazette", language: bn, type: regional, district: Khulna, homepage: "https://khulnagazette.com/", sections: ["https://khulnagazette.com/epaper"]}
+  - {id: khulnanews, name: "Khulna News", language: bn, type: regional, district: Khulna, homepage: "https://khulnanews.com/"}
+  - {id: voiceoftiger, name: "Voice of Tiger", language: bn, type: regional, district: Khulna, homepage: "https://voiceoftiger.com/", enabled: false}  # Cloudflare 522, origin down when added (2026-11)
+  - {id: dainiktathya, name: "Dainik Tathya", language: bn, type: regional, district: Khulna, homepage: "https://dainiktathya.com/"}
+  - {id: kushtiarkagoj, name: "Kushtiar Kagoj", language: bn, type: regional, district: Kushtia, homepage: "https://kushtiarkagoj.com/"}
+  - {id: dainikkushtia, name: "Dainik Kushtia", language: bn, type: regional, district: Kushtia, homepage: "https://dainikkushtia.net/"}
+  - {id: deshtottoh, name: "Dainik Deshtottoh", language: bn, type: regional, district: Kushtia, homepage: "https://dailydeshtottoh.com/"}
+  - {id: kushtiapress, name: "Kushtia Press", language: bn, type: regional, district: Kushtia, homepage: "https://kushtiapress.com/"}
+  - {id: kushtiabarta, name: "Daily Kushtia Barta", language: bn, type: regional, district: Kushtia, homepage: "https://kushtiabarta.net/"}
+  - {id: maguranews, name: "Magura News", language: bn, type: regional, district: Magura, homepage: "https://www.maguranews.com/"}
+  - {id: maguraprotidin, name: "Magura Protidin", language: bn, type: regional, district: Magura, homepage: "https://maguraprotidin.com/"}
+  - {id: meherpurnews, name: "Meherpur News", language: bn, type: regional, district: Meherpur, homepage: "https://www.meherpurnews.com/"}
+  - {id: meherpurpratidin, name: "Meherpur Pratidin", language: bn, type: regional, district: Meherpur, homepage: "https://www.meherpurpratidin.com/"}
+  - {id: dailymeherpur, name: "Daily Meherpur", language: bn, type: regional, district: Meherpur, homepage: "https://www.dailymeherpur.com/"}
+  - {id: sundarbontimes, name: "Sundarban Times", language: bn, type: regional, district: Satkhira, homepage: "https://www.sundarbontimes.com/"}
+  - {id: patradoot, name: "Dainik Patradoot", language: bn, type: regional, district: Satkhira, homepage: "https://patradoot.net/"}
+  - {id: manobadhikarsangbad, name: "Dainik Manobadhikar Sangbad", language: bn, type: regional, district: Satkhira, homepage: "https://dainikmanobadhikarsangbad.com/"}
+
+  # ---------- Local: Mymensingh division ----------
+  - {id: mymensinghpratidin, name: "Mymensingh Pratidin", language: bn, type: regional, district: Mymensingh, homepage: "https://mymensinghpratidin.com/"}
+  - {id: jamalpurbarta, name: "Jamalpur Barta", language: bn, type: regional, district: Jamalpur, homepage: "https://www.jamalpurbarta.com/"}
+  - {id: durjoybangla, name: "Durjoy Bangla", language: bn, type: regional, district: Netrokona, homepage: "https://www.durjoybangla.com/"}
+  - {id: netrokonanews24, name: "Netrokona News 24", language: bn, type: regional, district: Netrokona, homepage: "https://netrokonanews24.com/"}
+
+  # ---------- Local: Rajshahi division ----------
+  - {id: bograsangbad, name: "Bogra Sangbad", language: bn, type: regional, district: Bogura, homepage: "https://bograsangbad.com/"}
+  - {id: bogratimes, name: "Bogra Times", language: bn, type: regional, district: Bogura, homepage: "https://dailybogratimes.com/"}
+  - {id: boguralive, name: "Bogura Live", language: bn, type: regional, district: Bogura, homepage: "https://boguralive.com/"}
+  - {id: ichamotinews, name: "Ichamoti News", language: bn, type: regional, district: Bogura, homepage: "https://ichamotinews.com/"}
+  - {id: gourbangla, name: "Dainik Gour Bangla", language: bn, type: regional, district: Chapainawabganj, homepage: "https://gourbangla.com/"}
+  - {id: chapaidarpon, name: "Chapai Darpon", language: bn, type: regional, district: Chapainawabganj, homepage: "https://www.chapaidarpon.com/"}
+  - {id: chapainawabganjnews, name: "Chapainawabganj News", language: bn, type: regional, district: Chapainawabganj, homepage: "http://www.chapainawabganjnews.com/"}
+  - {id: praptiprosongo, name: "Prapti Prosongo", language: bn, type: regional, district: Natore, homepage: "https://praptiprosongo.com/"}
+  - {id: onabil, name: "Onabil Sangbad", language: bn, type: regional, district: Pabna, homepage: "https://onabil.net/"}
+  - {id: pabnavoice24, name: "Pabna Voice 24", language: bn, type: regional, district: Pabna, homepage: "https://pabnavoice24.com/"}
+  - {id: rajshahirsomoy, name: "Rajshahir Somoy", language: bn, type: regional, district: Rajshahi, homepage: "https://rajshahirsomoy.com/"}
+  - {id: dailysunshine, name: "The Daily Sunshine", language: en, type: regional, district: Rajshahi, homepage: "https://www.dailysunshine.com.bd/"}
+  - {id: sonalisangbad, name: "Sonali Sangbad", language: bn, type: regional, district: Rajshahi, homepage: "https://sonalisangbad.com/"}
+  - {id: sonardesh, name: "Sonar Desh", language: bn, type: regional, district: Rajshahi, homepage: "https://www.dailysonardesh.com/"}
+  - {id: padmatimes24, name: "Padma Times 24", language: bn, type: regional, district: Rajshahi, homepage: "https://padmatimes24.com/"}
+  - {id: rajshahinews24, name: "Rajshahi News24", language: bn, type: regional, district: Rajshahi, homepage: "https://rajshahinews24.com/"}
+  - {id: chandnibazar, name: "Daily Chandni Bazar", language: bn, type: regional, district: Rajshahi, homepage: "https://dailychandnibazar.com.bd/"}
+  - {id: sirajganjprotidin, name: "Dainik Sirajganj Protidin", language: bn, type: regional, district: Sirajganj, homepage: "https://sirajganjprotidin.com/"}
+  - {id: sirajganjkantho, name: "Sirajganj Kantho", language: bn, type: regional, district: Sirajganj, homepage: "https://sirajganjkantho.news/"}
+  - {id: sirajganjnews24, name: "Sirajganj News 24", language: bn, type: regional, district: Sirajganj, homepage: "https://sirajganjnews24.com/"}
+
+  # ---------- Local: Rangpur division ----------
+  - {id: dinajpur24, name: "Dinajpur24", language: bn, type: regional, district: Dinajpur, homepage: "https://dinajpur24.com/"}
+  - {id: dinajpurbarta24, name: "Dinajpur Barta 24", language: bn, type: regional, district: Dinajpur, homepage: "https://dinajpurbarta24.com/"}
+  - {id: chilahatiweb, name: "Chilahati Web", language: bn, type: regional, district: Nilphamari, homepage: "https://www.chilahatiweb.com/"}
+  - {id: amaderprotidin, name: "Amader Protidin", language: bn, type: regional, district: Rangpur, homepage: "https://amader-protidin.com/"}
+  - {id: dainikporibesh, name: "Dainik Poribesh", language: bn, type: regional, district: Rangpur, homepage: "https://dainikporibesh.com/"}
+  - {id: rangpur24, name: "Rangpur24", language: bn, type: regional, district: Rangpur, homepage: "https://rangpur24.com/"}
+  - {id: rangpurnews, name: "Rangpur News", language: bn, type: regional, district: Rangpur, homepage: "https://rangpur.news/"}
+  - {id: uttorbangla, name: "Uttor Bangla", language: bn, type: regional, homepage: "https://www.uttorbangla.com/"}  # Rangpur division
+
+  # ---------- Local: Sylhet division ----------
+  - {id: habiganjexpress, name: "Habiganj Express", language: bn, type: regional, district: Habiganj, homepage: "https://www.habiganjexpress.com/"}
+  - {id: shaistaganj, name: "Shaistaganj", language: bn, type: regional, district: Habiganj, homepage: "https://shaistaganj.com/"}
+  - {id: alokitohabiganj, name: "Alokito Habiganj", language: bn, type: regional, district: Habiganj, homepage: "https://alokitohabiganj.com/"}
+  - {id: patakurirdesh, name: "Patakurir Desh", language: bn, type: regional, district: Moulvibazar, homepage: "https://www.patakuri.com/"}
+  - {id: moulvibazar24, name: "Moulvibazar24", language: bn, type: regional, district: Moulvibazar, homepage: "https://moulvibazar24.com/"}
+  - {id: mkantho, name: "Moulvibazar Kantho", language: bn, type: regional, district: Moulvibazar, homepage: "https://mkantho.com/"}
+  - {id: sunamkantha, name: "Daily Sunamkantha", language: bn, type: regional, district: Sunamganj, homepage: "https://sunamkantha.com/"}
+  - {id: sunamganjersomoy, name: "Dainik Sunamganjer Somoy", language: bn, type: regional, district: Sunamganj, homepage: "https://sunamganjersomoy.com/"}
+  - {id: sunamganjbarta, name: "Sunamganj Barta", language: bn, type: regional, district: Sunamganj, homepage: "https://sunamganjbarta.com/"}
+  - {id: shyamalsylhet, name: "Dainik Shyamal Sylhet", language: bn, type: regional, district: Sylhet, homepage: "https://www.shyamalsylhet.net/"}
+  - {id: dailyjalalabad, name: "Dainik Jalalabad", language: bn, type: regional, district: Sylhet, homepage: "https://dailyjalalabad.com/"}
+  - {id: shubhoprotidin, name: "Shubho Protidin", language: bn, type: regional, district: Sylhet, homepage: "https://shubhoprotidin24.com/"}
+  - {id: sylhetview24, name: "Sylhet View 24", language: bn, type: regional, district: Sylhet, homepage: "https://www.sylhetview24.news/"}
+  - {id: euttorpurbo, name: "Uttorpurbo (e-paper)", language: bn, type: regional, district: Sylhet, homepage: "https://euttorpurbo.com/"}
+  - {id: sylhetprothidin24, name: "Sylhet Prothidin 24", language: bn, type: regional, district: Sylhet, homepage: "https://sylhetprothidin24.com/"}
+  - {id: sylhetershomoy, name: "Daily Sylheter Shomoy", language: bn, type: regional, district: Sylhet, homepage: "https://dailysylhetersomoy.com/"}
+  - {id: natunsylhet, name: "Natun Sylhet", language: bn, type: regional, district: Sylhet, homepage: "https://www.natunsylhet24.com/"}
+  - {id: sonarsylhet, name: "Sonar Sylhet", language: bn, type: regional, district: Sylhet, homepage: "https://sonarsylhet.com/"}
+  - {id: crimesylhet, name: "Crime Sylhet", language: bn, type: regional, district: Sylhet, homepage: "https://www.crimesylhet.com/"}
+  - {id: motamat, name: "Motamat", language: bn, type: regional, district: Sylhet, homepage: "https://motamat.com/"}
+  - {id: sylhetsurma, name: "Daily Sylhet Surma", language: bn, type: regional, district: Sylhet, homepage: "https://www.sylhetsurma.com/"}
+  - {id: sylhetmirror, name: "Daily Sylhet Mirror", language: bn, type: regional, district: Sylhet, homepage: "https://dailysylhetmirror.com/"}
+  - {id: sylhettoday24, name: "Sylhet Today 24", language: bn, type: regional, district: Sylhet, homepage: "https://www.sylhettoday24.news/"}
+  - {id: ajkersylhet, name: "Ajker Sylhet", language: bn, type: regional, district: Sylhet, homepage: "https://ajkersylhet.com/"}
+  - {id: sylhetersokal, name: "Sylheter Sokal", language: bn, type: regional, district: Sylhet, homepage: "https://dailysylhetersokal.com/"}
+  - {id: thesylhetpost, name: "The Sylhet Post", language: bn, type: regional, district: Sylhet, homepage: "https://thesylhetpost.com/"}
+  - {id: zakiganjsangbad, name: "Zakiganj Sangbad", language: bn, type: regional, district: Sylhet, homepage: "https://zakiganjsangbad.com/"}
+  - {id: balaganjprotidin, name: "Balaganj Protidin", language: bn, type: regional, district: Sylhet, homepage: "https://balaganjprotidin.com/"}
+  - {id: jaintabarta, name: "Jainta Barta 24", language: bn, type: regional, district: Sylhet, homepage: "https://jaintabarta.net/"}
+  - {id: dailyadin, name: "Dainik Adin", language: bn, type: regional, district: Sylhet, homepage: "https://www.dailyadin.com/"}
