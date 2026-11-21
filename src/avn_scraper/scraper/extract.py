@@ -52,7 +52,7 @@ _MONTHS = {
 _MONTH_RE = "|".join(sorted(map(re.escape, _MONTHS), key=len, reverse=True))
 _DAY_MONTH_YEAR = re.compile(rf"(?<!\d)(\d{{1,2}})(?:st|nd|rd|th)?\s*({_MONTH_RE})\.?,?\s*(\d{{4}})", re.I)
 _MONTH_DAY_YEAR = re.compile(rf"(?<![^\W\d_])({_MONTH_RE})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*(\d{{4}})", re.I)
-_AGO = re.compile(r"(\d+)\s*(মিনিট|ঘণ্টা|ঘন্টা|দিন|সপ্তাহ|মাস|বছর|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)"
+_AGO = re.compile(r"(?<!\d)(\d{1,4})\s*(মিনিট|ঘণ্টা|ঘন্টা|দিন|সপ্তাহ|মাস|বছর|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)"
                   r"\s*(?:আগে|পূর্বে|ago)", re.I)
 _AGO_UNITS = {"মিনিট": "m", "ঘণ্টা": "h", "ঘন্টা": "h", "দিন": "d", "সপ্তাহ": "w", "মাস": "mo", "বছর": "y"}
 _META_ATTR = re.compile(r"date|time|meta|publish|posted|byline|entry-?info|post-?info", re.I)
@@ -207,13 +207,16 @@ def _meta_like(node, depth: int = 3) -> bool:
 
 
 _NEAR_HEADLINE_CHARS = 1500
+_MAX_META_CHARS = 300  # a meta line is short; longer text is body copy, and capping it keeps the regexes cheap
 
 
 def _date_in(node, now: datetime) -> datetime | None:
     if node.tag in ("script", "style", "-text"):
         return None
     own = node.text(deep=False)
-    return _text_to_day(own, now) if own and own.strip() and _meta_like(node) else None
+    if not own or not own.strip() or len(own) > _MAX_META_CHARS:
+        return None
+    return _text_to_day(own, now) if _meta_like(node) else None
 
 
 def _text_date(tree: HTMLParser, now: datetime) -> datetime | None:
