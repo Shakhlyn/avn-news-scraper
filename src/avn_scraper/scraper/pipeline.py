@@ -292,7 +292,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     tz = ZoneInfo(cfg.timezone)
     started = datetime.now(timezone.utc)
     run_id = started.strftime("%Y%m%dT%H%M%SZ")
-    hours = opts.since_hours or float(s.get("window_hours", 24))
+    hours = opts.since_hours or float(s.get("window_hours", 30))
     if opts.since_last_run:
         hours = lookback_hours(hours, await storage.last_full_run(), started)
     cutoff = started - timedelta(hours=hours)

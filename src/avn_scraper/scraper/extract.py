@@ -18,7 +18,7 @@ from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from .normalize import normalize, normalize_unicode
 
 # Publication-date meta tags, by name or property. Modified/updated dates are left out on
-# purpose: an old story edited today must not pass the 24-hour window.
+# purpose: an old story edited today must not pass the run's window.
 _DATE_META_NAMES = (
     "article:published_time", "og:published_time", "datepublished", "published_time",
     "published_date", "publish-date", "publish_date", "publishdate", "publication_date",

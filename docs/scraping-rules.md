@@ -6,12 +6,14 @@ and outlets in `config/sources.yaml`.
 
 ## Schedule and time window
 
-- The service (`./serve.sh`) runs the job **once a day at 07:00 Asia/Dhaka**, while it is running.
+- The service (`./serve.sh`) runs the job **once a day at 23:30 Asia/Dhaka**, while it is running.
   Nothing on the PC starts it automatically.
-- Each run looks back **24 hours** (`window_hours: 24`): from 07:00 yesterday to now.
-  Nothing older is kept, so news is not repeated across days.
-- If a day was missed (PC off, run failed), catch up with `avn run --since 48`, or with
-  24 × the number of days missed.
+- Each run looks back **30 hours** (`window_hours: 30`): from 17:30 the day before to now.
+  The 6 hours that overlap the previous run catch stories it missed (published late, or
+  listed late). Links the previous run already stored or judged (`seen_urls`) are skipped,
+  so the overlap downloads nothing twice and news is not repeated across days.
+- If a day was missed (PC off, run failed), catch up with `avn run --since 54`, or with
+  24 × the number of days missed + 6.
 - Older news (past months, years) is scraped on demand with `avn backfill` (see below).
 - An article is stored once. Links that were downloaded and didn't match are remembered
   and not downloaded again.
@@ -57,7 +59,7 @@ then shows 0 tabs).
 Each tab (and the print edition) is read page by page, following its "next page" link
 (`rel=next`, `?page=N`, `/page/N`). Reading stops at the first of:
 
-1. **24 hours reached**: most dated items on the page are older than the window. Dates
+1. **Window reached**: most dated items on the page are older than the window. Dates
    come from `<time datetime>` on the page, or else from dates in the article URLs.
    **Regional outlets** mostly show no such dates on their lists (only text like
    "২০ নভেম্বর" or "১ মাস আগে", next to the header's "today" date). For a page without dates,
@@ -67,8 +69,8 @@ Each tab (and the print edition) is read page by page, following its "next page"
    homepage ("latest" / "most read" widgets) are not sampled. Probed articles are not
    downloaded again: old ones are dropped, the rest go on to classification.
 2. **Previous run reached**: at least half of the page's links were already seen by an
-   earlier run (`data/cache/listing_seen.json`). Since the job runs every 24 hours, that
-   is where the last run stopped. Dry runs and `check-sources` never update this file.
+   earlier run (`data/cache/listing_seen.json`), kept 4 days. Since the job runs every
+   24 hours, that is where the last run stopped. Dry runs and `check-sources` never update this file.
 3. **No next page**, or the next page brings no new links.
 4. **Safety caps**: `sections.max_pages` (20) pages per tab and `sections.max_per_source`
    (60) tabs per outlet.
@@ -90,7 +92,7 @@ The very first run has no memory yet, so tabs without dates are read to the page
 - **Classification**: the full text is scored against `keywords.yaml`. An article is kept
   only if it qualifies for a category. A strong term is required, and weak terms only add
   score.
-- **Date check**: an article published before the 24-hour window is dropped, even if a
+- **Date check**: an article published before the 30-hour window is dropped, even if a
   link to it was found. The publication date is read from the page in this order: JSON-LD
   `datePublished` (of the article, not the web page), publication meta tags
   (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, a `<time>` in the
@@ -103,7 +105,7 @@ The very first run has no memory yet, so tabs without dates are read to the page
   homepage, or its headline is the outlet name) is ignored. A time without an offset is Dhaka
   time. A full timestamp beats a bare day. When the only date is a bare day (no time, or
   exactly 00:00:00), it is compared by day in Dhaka: a story dated with yesterday's day is
-  kept, not dropped as "before 07:00".
+  kept, not dropped as "before 17:30".
 - **Blocked pages** (403, 404, robots.txt) are judged on the headline and summary we already
   have. If they match, they are saved with `body_missing = 1`, and they are not retried.
   **Temporary failures** (timeouts, 5xx) are retried on the next run.
@@ -166,7 +168,7 @@ A banned IP also stops every later test, so the scraper backs off before a site 
 
 ## Backfill: past months (`avn backfill`)
 
-The daily run only looks back 24 hours. Past months are scraped on demand:
+The daily run only looks back 30 hours. Past months are scraped on demand:
 
 ```
 avn backfill 2025-05                  # one month

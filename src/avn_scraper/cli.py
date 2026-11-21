@@ -332,7 +332,7 @@ def check_sources(
     if refresh:
         for s in selected:
             cache.clear(s.id)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=float(cfg.settings.get("window_hours", 24)))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=float(cfg.settings.get("window_hours", 30)))
     memory = ListingMemory(cfg.data_dir / "cache" / "listing_seen.json")  # read only: never saved here
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -29,7 +29,7 @@ def create_app(cfg: Config | None = None, scrapes: ScrapeManager | None = None, 
     settings = Settings()
     pool = make_pool(settings.database_url, settings.db_pool_max)
     scrapes = scrapes or ScrapeManager(cfg)
-    hour, minute = str(cfg.settings.get("daily_at", "07:00")).split(":")
+    hour, minute = str(cfg.settings.get("daily_at", "23:30")).split(":")
     scheduler = Scheduler(scrapes, lambda: last_full_run(pool), time(int(hour), int(minute)), ZoneInfo(cfg.timezone))
 
     @asynccontextmanager

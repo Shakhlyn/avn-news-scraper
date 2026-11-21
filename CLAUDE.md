@@ -1,6 +1,6 @@
 # AVN news scraper
 
-Daily scraper (07:00 Asia/Dhaka) for human-rights news from Bangladeshi outlets. See README.md.
+Daily scraper (23:30 Asia/Dhaka, 30-hour window) for human-rights news from Bangladeshi outlets. See README.md.
 
 The FastAPI service (`src/avn_scraper/main.py`, `./serve.sh`) runs the daily scrape and serves the news
 and review API that the AVN site's `/dashboard` reads. FastAPI lives in this repo only.
@@ -12,7 +12,7 @@ waits uses async (`psycopg` `AsyncConnection`, `httpx`). Blocking or CPU-heavy w
 file writes, pandas) goes through `asyncio.to_thread`, or it freezes the API during a scrape.
 The functions it calls stay plain `def`. No threads of our own, and no sync `psycopg`.
 
-- The scraping rules (24-hour window, which tabs / print editions are read, pagination
+- The scraping rules (30-hour window, which tabs / print editions are read, pagination
   stops, what is skipped and kept) are in `docs/scraping-rules.md`. Follow them, and update
   that file whenever a change alters them.
 - Tests: `.venv/bin/python -m pytest -q`. Check real sites with `.venv/bin/avn check-sources -v`

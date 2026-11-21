@@ -1,6 +1,6 @@
 # AVN News Scraper
 
-Runs every morning at 07:00 Bangladesh time and scans Bangladeshi newspapers, TV news portals and regional papers in both Bangla and English. It keeps only articles about:
+Runs every night at 23:30 Bangladesh time and scans Bangladeshi newspapers, TV news portals and regional papers in both Bangla and English. It keeps only articles about:
 
 | Category key | Topic |
 |---|---|
@@ -53,7 +53,7 @@ month can take hours. Rules and limits: `docs/scraping-rules.md`, "Backfill".
 
 ## How it works
 
-1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, the print edition, every top-level section tab, RSS feeds and news sitemaps. Tabs and the print edition are found on the homepage on each run, and each one is read page by page back to 24 hours ago. The rules are in [docs/scraping-rules.md](docs/scraping-rules.md). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
+1. **Discover**: for every outlet in `config/sources.yaml` it reads the homepage headlines, the print edition, every top-level section tab, RSS feeds and news sitemaps. Tabs and the print edition are found on the homepage on each run, and each one is read page by page back to 30 hours ago. The rules are in [docs/scraping-rules.md](docs/scraping-rules.md). Feeds and sitemaps are auto-discovered from the homepage and `robots.txt`, then cached for 7 days.
 2. **Pre-filter**: only links whose headline, summary or URL contains a keyword get downloaded.
 3. **Fetch and extract**: requests are polite (1 at a time per site with jittered spacing, robots.txt respected, retries, and a stop plus cooldown for any site that starts refusing us). `trafilatura` extracts the clean text, author and date. When the page's own structured data (JSON-LD `articleBody`) is clearly longer, that is used instead. Channel 24, a JavaScript-only site, is read through its JSON API (`src/avn_scraper/adapters.py`).
 4. **Classify**: keyword rules from `config/keywords.yaml` are applied to the full text (see below).
@@ -115,7 +115,7 @@ ON CONFLICT (article_id) DO UPDATE SET verified = excluded.verified, notes = exc
 
 `./serve.sh` starts the FastAPI service on `127.0.0.1:8100`, after starting the database if it is stopped. You start it yourself: nothing on the PC starts it or runs a scrape automatically. While it runs, it does three jobs:
 
-- **Daily scrape:** at `daily_at` in `settings.yaml` (07:00 Dhaka), only while the service is running. It checks every minute, so if the service wasn't running at 07:00, it scrapes soon after you start it. A failed run is retried after 30 minutes. The look-back reaches the start of the last full run, and is never shorter than `window_hours`: after 3 days off it covers 72 hours. Outlets may no longer list very old items, so a long gap may not be recovered in full; use `avn backfill` for that.
+- **Daily scrape:** at `daily_at` in `settings.yaml` (23:30 Dhaka), only while the service is running. It checks every minute, so if the service wasn't running at 23:30, it scrapes soon after you start it. A failed run is retried after 30 minutes. The look-back reaches the start of the last full run, and is never shorter than `window_hours`: after 3 days off it covers 72 hours. Outlets may no longer list very old items, so a long gap may not be recovered in full; use `avn backfill` for that.
 - **News API:** what the AVN site's `/dashboard` reads.
 - **Review desk API:** accepting and withdrawing stories.
 

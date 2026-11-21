@@ -2,13 +2,15 @@
 timezone: Asia/Dhaka
 data_dir: data
 
-# How far back to look on each run. The service scrapes daily at 07:00 (Asia/Dhaka), so
-# 24h covers exactly the news since the previous run.
-window_hours: 24
+# How far back to look on each run. The service scrapes daily at 23:30 (Asia/Dhaka); 30h
+# reaches back to 17:30 the day before, so the 6 h overlap with the previous run catches
+# stories published or dated late. Articles the previous run already stored or judged
+# (seen_urls) are not downloaded again.
+window_hours: 30
 
 # When the service (`avn serve`) starts the daily scrape, in `timezone`. If it was not
 # running then, it scrapes soon after it starts.
-daily_at: "07:00"
+daily_at: "23:30"
 
 http:
   user_agent: "Mozilla/5.0 (compatible; AVNNewsScraper/0.1; human-rights news monitoring)"

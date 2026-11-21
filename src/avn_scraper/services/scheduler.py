@@ -1,5 +1,5 @@
 """The daily scrape, inside the service. It checks once a minute instead of sleeping
-until 07:00, so a PC that was off, asleep or offline at 07:00 catches up by itself:
+until `daily_at` (23:30), so a PC that was off, asleep or offline then catches up by itself:
 any time the latest slot has no full run after it, a scrape is due."""
 
 from __future__ import annotations
