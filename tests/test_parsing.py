@@ -277,3 +277,35 @@ def test_judge_compares_bare_day_by_day():
     # a full timestamp from the feed wins over the bare day
     assert outcome(datetime(2026, 11, 20, tzinfo=timezone.utc),
                    feed=datetime(2026, 11, 20, 0, 30, tzinfo=timezone.utc)) == "too_old"
+
+
+def test_extract_huge_title_is_cut_not_split():
+    import time
+
+    title = " | ".join(["শব্দ"] * 50_000)
+    html = f"<html><head><title>{title}</title></head><body><h1>শিরোনাম এখানে</h1>{_BODY}</body></html>"
+    start = time.monotonic()
+    ex = extract(html, "https://example.com/n/11")
+    assert time.monotonic() - start < 5
+    assert len(ex.title) <= 500
+
+
+def test_extract_naive_time_is_dhaka_and_midnight_is_a_bare_day():
+    html = f"""<html><head><script type="application/ld+json">
+    {{"@type": "NewsArticle", "datePublished": "2026-10-19 22:03:00"}}</script></head>
+    <body><article><h1>শিরোনাম এখানে</h1>{_BODY}</article></body></html>"""
+    ex = extract(html, "https://example.com/n/12")
+    assert ex.published_at == datetime(2026, 10, 19, 16, 3, tzinfo=timezone.utc)
+    html = f"""<html><head><meta property="article:published_time" content="2026-10-27T00:00:00+06:00">
+    </head><body><article><h1>শিরোনাম এখানে</h1>{_BODY}</article></body></html>"""
+    assert extract(html, "https://example.com/n/13").date_only
+
+
+def test_extract_skips_site_wide_json_ld_date():
+    # same NewsArticle block on every page: homepage as its page, stale date
+    html = f"""<html><head><script type="application/ld+json">
+    {{"@type": "NewsArticle", "mainEntityOfPage": {{"@type": "WebPage", "@id": "https://example.com/"}},
+      "headline": "এখন টিভি", "datePublished": "2024-03-19"}}</script></head>
+    <body><article><h1>শিরোনাম এখানে</h1><time datetime="2026-10-27T15:15:13.840Z">আজ</time>{_BODY}</article></body></html>"""
+    ex = extract(html, "https://example.com/n/14")
+    assert ex.published_at == datetime(2026, 10, 27, 15, 15, 13, 840000, tzinfo=timezone.utc)

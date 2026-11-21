@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import trafilatura
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
@@ -25,10 +28,14 @@ _DATE_META_NAMES = (
 )
 # schema.org types whose datePublished is the story's own date (a WebPage's may differ).
 _ARTICLE_TYPES = re.compile(r"article|posting|report", re.I)
+# Every outlet is in Bangladesh: a time without an offset is Dhaka wall-clock time.
+_DHAKA = ZoneInfo("Asia/Dhaka")
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TITLE_SEPARATORS = (" | ", " - ", " – ", " — ", " :: ", " » ", " ; ")
 _TITLE_FILTER = re.compile(r"[\W_]+")
 _MIN_H1_WORDS = 2
+# Real headlines are far shorter; a longer title is left as is (and cut) instead of split.
+_MAX_TITLE_CHARS = 500
 
 
 @dataclass
@@ -40,13 +47,13 @@ class Extracted:
     published_at: datetime | None
     canonical_url: str | None
     image: str | None
-    # True when the page gave only a day (no time). Then published_at is midnight UTC of
-    # that day and must be compared by day, not by the hour.
+    # True when the page gave only a day (no time, or exactly 00:00:00). Then published_at
+    # is midnight of that day and must be compared by day, not by the hour.
     date_only: bool = False
 
 
 def _parse_dt(value: str | None) -> datetime | None:
-    """ISO 8601 or RFC 2822 date string -> aware datetime (UTC when no offset is given)."""
+    """ISO 8601 or RFC 2822 date string -> aware datetime (Dhaka time when no offset is given)."""
     if not value or not isinstance(value, str):
         return None
     value = normalize_unicode(value).strip()
@@ -65,7 +72,13 @@ def _parse_dt(value: str | None) -> datetime | None:
             dt = parsedate_to_datetime(value)
         except (TypeError, ValueError, IndexError):
             return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=_DHAKA)
+
+
+def _bare_day(raw: str, dt: datetime) -> bool:
+    """A day without a time: "2026-11-20", or a timestamp of exactly midnight."""
+    return bool(_DATE_ONLY.match(normalize_unicode(raw).strip())) or (
+        dt.hour == dt.minute == dt.second == dt.microsecond == 0)
 
 
 def _ld_items(tree: HTMLParser) -> Iterator[dict]:
@@ -75,9 +88,9 @@ def _ld_items(tree: HTMLParser) -> Iterator[dict]:
             data = json.loads(script.text(), strict=False)
         except ValueError:
             continue
-        stack = [data]
+        stack = deque([data])
         while stack:
-            item = stack.pop(0)
+            item = stack.popleft()
             if isinstance(item, list):
                 stack.extend(item)
             elif isinstance(item, dict):
@@ -92,8 +105,22 @@ def _is_article(item: dict) -> bool:
     return any(isinstance(k, str) and _ARTICLE_TYPES.search(k) for k in kinds)
 
 
+def _is_template(item: dict, site_key: str) -> bool:
+    """A site-wide JSON-LD block (same on every page, often with a stale date): its page
+    is the homepage, or its headline is the outlet name."""
+    page = item.get("mainEntityOfPage")
+    page = page.get("@id") if isinstance(page, dict) else page
+    for url in (page, item.get("url")):
+        if isinstance(url, str) and url.startswith("http") and urlsplit(url).path in ("", "/"):
+            return True
+    headline = item.get("headline")
+    return bool(site_key) and isinstance(headline, str) and _key(headline) == site_key
+
+
 def _date_candidates(tree: HTMLParser, ld: list[dict]) -> Iterator[str]:
     """Raw publication-date strings, most reliable first."""
+    site_key = _site_key(tree)
+    ld = [item for item in ld if not _is_template(item, site_key)]
     for item in sorted(ld, key=lambda i: not _is_article(i)):
         if isinstance(item.get("datePublished"), str):
             yield item["datePublished"]
@@ -123,7 +150,7 @@ def _published(tree: HTMLParser, ld: list[dict], fallback: str | None) -> tuple[
         dt = _parse_dt(raw)
         if dt is None:
             continue
-        if not _DATE_ONLY.match(normalize_unicode(raw).strip()):
+        if not _bare_day(raw, dt):
             return dt, False
         day = day or dt
     if day is not None:
@@ -133,7 +160,7 @@ def _published(tree: HTMLParser, ld: list[dict], fallback: str | None) -> tuple[
     for raw in (time_node.attributes.get("datetime") if time_node is not None else None, fallback):
         dt = _parse_dt(raw)
         if dt is not None:
-            return dt, bool(_DATE_ONLY.match(normalize_unicode(raw).strip()))
+            return dt, _bare_day(raw, dt)
     return None, False
 
 
@@ -180,6 +207,8 @@ def _clean_title(title: str, tree: HTMLParser) -> str:
     When the title splits at a separator and its longer side is the page's <h1>, that
     <h1> is the title. Otherwise a part is dropped only when it is og:site_name.
     """
+    if len(title) > _MAX_TITLE_CHARS:
+        return title[:_MAX_TITLE_CHARS]
     site_key = _site_key(tree)
     h1s = {_key(h): h for h in (" ".join(n.text(separator=" ").split()) for n in tree.css("h1"))
            if len(h.split()) >= _MIN_H1_WORDS and _key(h) and _key(h) != site_key}

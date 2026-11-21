@@ -88,9 +88,11 @@ The very first run has no memory yet, so tabs without dates are read to the page
   `datePublished` (of the article, not the web page), publication meta tags
   (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, a `<time>` in the
   article or header, then any `<time>` on the page. Modified/updated dates are never used, so
-  an old story edited today does not pass. A full timestamp beats a bare day. When the
-  only date is a bare day (no time), it is compared by day in Dhaka: a story dated with
-  yesterday's day is kept, not dropped as "before 07:00".
+  an old story edited today does not pass, and a site-wide JSON-LD block (its page is the
+  homepage, or its headline is the outlet name) is ignored. A time without an offset is Dhaka
+  time. A full timestamp beats a bare day. When the only date is a bare day (no time, or
+  exactly 00:00:00), it is compared by day in Dhaka: a story dated with yesterday's day is
+  kept, not dropped as "before 07:00".
 - **Blocked pages** (403, 404, robots.txt) are judged on the headline and summary we already
   have. If they match, they are saved with `body_missing = 1`, and they are not retried.
   **Temporary failures** (timeouts, 5xx) are retried on the next run.
