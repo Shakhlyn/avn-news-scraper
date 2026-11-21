@@ -7,7 +7,7 @@ import re
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -36,6 +36,27 @@ _TITLE_FILTER = re.compile(r"[\W_]+")
 _MIN_H1_WORDS = 2
 # Real headlines are far shorter; a longer title is left as is (and cut) instead of split.
 _MAX_TITLE_CHARS = 500
+
+# Visible dates, for pages with no date markup (many local outlets): "December 24, 2024",
+# "২৪ ডিসেম্বর ২০২৪", "৩ ঘণ্টা আগে". Only in elements that look like the article's meta line,
+# never in a header clock ("today-date", "time-now") or an "updated" stamp.
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7,
+    "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9,
+    "oct": 10, "nov": 11, "dec": 12,
+    "জানুয়ারি": 1, "জানুয়ারী": 1, "ফেব্রুয়ারি": 2, "ফেব্রুয়ারী": 2, "মার্চ": 3, "এপ্রিল": 4,
+    "মে": 5, "জুন": 6, "জুলাই": 7, "আগস্ট": 8, "আগষ্ট": 8, "সেপ্টেম্বর": 9, "অক্টোবর": 10,
+    "নভেম্বর": 11, "ডিসেম্বর": 12,
+}
+_MONTH_RE = "|".join(sorted(map(re.escape, _MONTHS), key=len, reverse=True))
+_DAY_MONTH_YEAR = re.compile(rf"(?<!\d)(\d{{1,2}})(?:st|nd|rd|th)?\s*({_MONTH_RE})\.?,?\s*(\d{{4}})", re.I)
+_MONTH_DAY_YEAR = re.compile(rf"(?<![^\W\d_])({_MONTH_RE})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*(\d{{4}})", re.I)
+_AGO = re.compile(r"(\d+)\s*(মিনিট|ঘণ্টা|ঘন্টা|দিন|সপ্তাহ|মাস|বছর|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)"
+                  r"\s*(?:আগে|পূর্বে|ago)", re.I)
+_AGO_UNITS = {"মিনিট": "m", "ঘণ্টা": "h", "ঘন্টা": "h", "দিন": "d", "সপ্তাহ": "w", "মাস": "mo", "বছর": "y"}
+_META_ATTR = re.compile(r"date|time|meta|publish|posted|byline|entry-?info|post-?info", re.I)
+_NOT_META_ATTR = re.compile(r"today|now|current|clock|update|modif|weather|top[-_]?bar|site[-_]?header|ticker|masthead", re.I)
 
 
 @dataclass
@@ -142,7 +163,95 @@ def _date_candidates(tree: HTMLParser, ld: list[dict]) -> Iterator[str]:
         yield node.attributes.get("datetime") or ""
 
 
-def _published(tree: HTMLParser, ld: list[dict], fallback: str | None) -> tuple[datetime | None, bool]:
+def _ago(amount: int, unit: str, now: datetime) -> datetime:
+    unit = _AGO_UNITS.get(unit, unit.lower())
+    if unit.startswith("mo"):
+        return now - timedelta(days=30 * amount)
+    if unit.startswith("mi") or unit == "m":
+        return now - timedelta(minutes=amount)
+    step = {"h": timedelta(hours=1), "d": timedelta(days=1), "w": timedelta(weeks=1), "y": timedelta(days=365)}
+    return now - step[unit[0]] * amount
+
+
+def _text_to_day(text: str, now: datetime) -> datetime | None:
+    """The first date written out in text, as midnight (Dhaka) of that day."""
+    text = normalize_unicode(text)
+    day = month = year = None
+    if m := _DAY_MONTH_YEAR.search(text):
+        day, month, year = int(m[1]), _MONTHS[m[2].lower()], int(m[3])
+    elif m := _MONTH_DAY_YEAR.search(text):
+        day, month, year = int(m[2]), _MONTHS[m[1].lower()], int(m[3])
+    elif m := _AGO.search(text):
+        when = _ago(int(m[1]), m[2], now).astimezone(_DHAKA)
+        day, month, year = when.day, when.month, when.year
+    if day is None:
+        return None
+    try:
+        dt = datetime(year, month, day, tzinfo=_DHAKA)
+    except ValueError:
+        return None
+    return dt if 2000 <= year and dt <= now + timedelta(days=1) else None
+
+
+def _meta_like(node, depth: int = 3) -> bool:
+    """The element (or a close parent) is named like a date / meta line, and none of them
+    like a clock or an "updated" stamp."""
+    meta = False
+    while node is not None and depth >= 0:
+        names = f"{node.attributes.get('class') or ''} {node.attributes.get('id') or ''}"
+        if _NOT_META_ATTR.search(names):
+            return False
+        meta = meta or bool(_META_ATTR.search(names))
+        node, depth = node.parent, depth - 1
+    return meta
+
+
+_NEAR_HEADLINE_CHARS = 1500
+
+
+def _date_in(node, now: datetime) -> datetime | None:
+    if node.tag in ("script", "style", "-text"):
+        return None
+    own = node.text(deep=False)
+    return _text_to_day(own, now) if own and own.strip() and _meta_like(node) else None
+
+
+def _text_date(tree: HTMLParser, now: datetime) -> datetime | None:
+    """A visible date in the article's meta line, for pages without date markup.
+
+    Only next to the headline: in the <h1>'s own header block, or in the text right after it.
+    Dates earlier on the page are the masthead's "today" or other stories.
+    """
+    site_key = _site_key(tree)
+    h1s = [h for h in tree.css("h1") if len(h.text().split()) >= _MIN_H1_WORDS and _key(h.text()) != site_key]
+    if not h1s:
+        return None
+    headline = max(h1s, key=lambda h: len(h.text()))
+    block, level = headline.parent, 0
+    while block is not None and block.tag not in ("body", "html") and level < 2:
+        for node in block.traverse():
+            if (dt := _date_in(node, now)) is not None:
+                return dt
+        block, level = block.parent, level + 1
+    root = tree.body or tree.root
+    after, chars = False, 0
+    for node in root.traverse():
+        if node is headline or node.mem_id == headline.mem_id:
+            after = True
+            continue
+        if not after:
+            continue
+        if (dt := _date_in(node, now)) is not None:
+            return dt
+        own = node.text(deep=False) if node.tag not in ("script", "style") else ""
+        chars += len(own.strip()) if own else 0
+        if chars > _NEAR_HEADLINE_CHARS:
+            break
+    return None
+
+
+def _published(tree: HTMLParser, ld: list[dict], fallback: str | None,
+               now: datetime | None = None) -> tuple[datetime | None, bool]:
     """(published_at, date_only). A full timestamp beats a bare day from a better source,
     because a bare day read as midnight can push yesterday's story out of the window."""
     day: datetime | None = None
@@ -155,12 +264,16 @@ def _published(tree: HTMLParser, ld: list[dict], fallback: str | None) -> tuple[
         day = day or dt
     if day is not None:
         return day, True
-    # Last resorts: the first <time> anywhere on the page, then trafilatura's guess.
+    # Last resorts: the first <time> anywhere on the page, a date written in the article's
+    # meta line, then trafilatura's guess (which can pick up the header's "today" date).
     time_node = tree.css_first("time[datetime]")
-    for raw in (time_node.attributes.get("datetime") if time_node is not None else None, fallback):
-        dt = _parse_dt(raw)
-        if dt is not None:
-            return dt, _bare_day(raw, dt)
+    raw = time_node.attributes.get("datetime") if time_node is not None else None
+    if (dt := _parse_dt(raw)) is not None:
+        return dt, _bare_day(raw, dt)
+    if (dt := _text_date(tree, now or datetime.now(_DHAKA))) is not None:
+        return dt, True
+    if (dt := _parse_dt(fallback)) is not None:
+        return dt, _bare_day(fallback, dt)
     return None, False
 
 
@@ -242,7 +355,7 @@ def _pick_title(guess: str | None, tree: HTMLParser) -> str:
     return " ".join((guess or "").split())
 
 
-def extract(html: str, url: str) -> Extracted:
+def extract(html: str, url: str, now: datetime | None = None) -> Extracted:
     tree = HTMLParser(html)
     ld = list(_ld_items(tree))
     doc = trafilatura.bare_extraction(html, url=url, with_metadata=True,
@@ -261,7 +374,7 @@ def extract(html: str, url: str) -> Extracted:
 
     canonical = tree.css_first('link[rel="canonical"]')
     title = _pick_title(doc.get("title"), tree)
-    published, date_only = _published(tree, ld, doc.get("date"))
+    published, date_only = _published(tree, ld, doc.get("date"), now)
 
     return Extracted(
         title=title,

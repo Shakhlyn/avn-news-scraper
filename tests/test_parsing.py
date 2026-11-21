@@ -309,3 +309,23 @@ def test_extract_skips_site_wide_json_ld_date():
     <body><article><h1>শিরোনাম এখানে</h1><time datetime="2026-10-27T15:15:13.840Z">আজ</time>{_BODY}</article></body></html>"""
     ex = extract(html, "https://example.com/n/14")
     assert ex.published_at == datetime(2026, 10, 27, 15, 15, 13, 840000, tzinfo=timezone.utc)
+
+
+def test_extract_visible_date_next_to_headline_not_the_masthead_clock():
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 21, 20, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    head = '<div class="top_bar"><div class="top_bar_date">শনিবার, ২১ নভেম্বর ২০২৬</div></div>'
+    head += '<span class="today-date">Saturday , November 21 2026</span>'
+    related = '<aside><p class="post-meta"><span class="tie-date">November 21, 2026</span></p></aside>'
+    # date written in the meta line after the headline (WordPress theme)
+    html = f"""<html><body>{head}<div class="post"><h1 class="post-title">২০২৫ সালের ছুটির তালিকা প্রকাশ</h1>
+    <p class="post-meta"><span class="tie-date">December 24, 2024</span></p>{_BODY}</div>{related}</body></html>"""
+    ex = extract(html, "https://example.com/9420", now)
+    assert ex.published_at.date().isoformat() == "2024-12-24" and ex.date_only
+    # Bangla date in the headline's own header block, above the <h1>
+    html = f"""<html><body>{head}<header class="entry-header"><div class="meta"><span>প্রকাশ: ১৫ অক্টোবর ২০২৬,
+    ১০:১৩ অপরাহ্ন</span></div><h1>সৌদিতে দুই বাংলাদেশির মৃত্যুদণ্ড কার্যকর</h1></header>{_BODY}</body></html>"""
+    assert extract(html, "https://example.com/1", now).published_at.date().isoformat() == "2026-10-15"
+    # relative date
+    html = f"""<html><body>{head}<h1>শিরোনাম এখানে আছে</h1><span class="time">৩ দিন আগে</span>{_BODY}</body></html>"""
+    assert extract(html, "https://example.com/2", now).published_at.date().isoformat() == "2026-11-18"

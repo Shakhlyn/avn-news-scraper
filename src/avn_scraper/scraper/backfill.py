@@ -301,8 +301,10 @@ async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, 
         stopped = any(host_of(src.homepage) == host_of(f"https://{h}") for h in result.stopped)
         if arch.error:
             status = "failed"
-        elif info[src.id]["layout"] == "none":
+        elif info[src.id]["layout"] == "none" or arch.undated:
             status = "no_archive"
+            if arch.undated:
+                info[src.id]["layout"] = "undated"
         elif stopped or counts["temporary_failures"] or not finished_month:
             status = "partial"
         else:

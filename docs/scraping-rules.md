@@ -59,6 +59,13 @@ Each tab (and the print edition) is read page by page, following its "next page"
 
 1. **24 hours reached**: most dated items on the page are older than the window. Dates
    come from `<time datetime>` on the page, or else from dates in the article URLs.
+   **Regional outlets** mostly show no such dates on their lists (only text like
+   "২০ নভেম্বর" or "১ মাস আগে", next to the header's "today" date). For a page without dates,
+   the last `sections.date_probe` (3) articles on it are downloaded and their own dates read:
+   when all are older than the window, the tab stops. The bottom of the page is checked, not
+   the top, because local sites often pin older stories above the newest. Links also on the
+   homepage ("latest" / "most read" widgets) are not sampled. Probed articles are not
+   downloaded again: old ones are dropped, the rest go on to classification.
 2. **Previous run reached**: at least half of the page's links were already seen by an
    earlier run (`data/cache/listing_seen.json`). Since the job runs every 24 hours, that
    is where the last run stopped. Dry runs and `check-sources` never update this file.
@@ -87,7 +94,11 @@ The very first run has no memory yet, so tabs without dates are read to the page
   link to it was found. The publication date is read from the page in this order: JSON-LD
   `datePublished` (of the article, not the web page), publication meta tags
   (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, a `<time>` in the
-  article or header, then any `<time>` on the page. Modified/updated dates are never used, so
+  article or header, then any `<time>` on the page. Pages with none of these (most local
+  outlets) give a date written out next to the headline: in the headline's own block or the
+  text right after the `<h1>`, in an element named like a date/meta line
+  ("December 24, 2024", "২৪ ডিসেম্বর ২০২৪", "৫ ঘণ্টা আগে"). The masthead's "today" date,
+  clocks and "updated" stamps are never used. Modified/updated dates are never used, so
   an old story edited today does not pass, and a site-wide JSON-LD block (its page is the
   homepage, or its headline is the outlet name) is ignored. A time without an offset is Dhaka
   time. A full timestamp beats a bare day. When the only date is a bare day (no time, or
@@ -191,8 +202,12 @@ avn backfill --status                 # what is done, partial, left to retry
   While the daily scrape or `avn run` holds the run lock it pauses, so the two never hit a
   site together. Backfill runs are saved in `runs` with `stats.backfill`, and never count as
   the daily run (the scheduler and `--since-last-run` ignore them).
+- **Outlets without dates are skipped:** many local outlets' sitemaps list articles with no
+  `lastmod` and no date in the file name, so no month can be picked. After the first such
+  file the rest of the series is not read, and the outlet is `no_archive` (layout `undated`).
+  The daily run still reads them.
 - **Resuming:** progress is kept per outlet and month in `backfill_progress`: `done`,
-  `no_archive` (no dated sitemaps found: nothing to do), `partial` (the site was stopped or
+  `no_archive` (no dated sitemaps found, or entries without dates: nothing to do), `partial` (the site was stopped or
   on cooldown, downloads failed temporarily, or the month isn't over) or `failed` (sitemap
   not reachable). Articles are saved one by one. Run the same command again: `done` and
   `no_archive` are skipped, the rest retried, known links not downloaded again. `--redo`

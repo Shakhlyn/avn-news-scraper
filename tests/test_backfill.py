@@ -285,3 +285,24 @@ async def test_wordpress_sitemaps_read_newest_first_and_stop():
     # June is kept as a maybe (lastmod is an edit time); the article's own date decides later.
     assert sorted(c.url for c in result.candidates) == ["https://a.com/june-news/", "https://a.com/may-news/"]
     assert "https://a.com/post-sitemap.xml" not in fetcher.asked  # stopped at the April file
+    assert not result.undated
+
+
+@pytest.mark.anyio
+async def test_undated_sitemaps_are_skipped_after_one_file():
+    """A local site whose sitemap entries have no lastmod: no month can be picked, so the
+    series is not read further and the outlet is marked no_archive."""
+    from avn_scraper.scraper.discover.archive import ArchiveReader
+
+    def plain(*slugs):
+        urls = "".join(f"<url><loc>https://a.com/{s}/</loc></url>" for s in slugs)
+        return f'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
+
+    files = {f"https://a.com/post-sitemap{n}.xml": plain(f"story-{n}") for n in ("", "2", "3")}
+    layout = learn_layout("x", _children(*files))
+    fetcher = _FakeFetcher(files)
+    start, end = month_window(date(2025, 5, 1), DHAKA, TODAY)
+    source = Source(id="x", name="X", language="bn", type="regional", homepage="https://a.com/")
+    result = await ArchiveReader(fetcher).month(source, layout, start, end)
+    assert result.undated and result.candidates == []
+    assert fetcher.asked == ["https://a.com/post-sitemap3.xml"]

@@ -145,6 +145,7 @@ class ArchiveResult:
     files: int = 0          # sitemap files read
     missing: int = 0        # dated files that did not exist (404) or failed
     error: str | None = None
+    undated: bool = False   # sitemaps list articles but give them no date: a month can't be picked
 
 
 class ArchiveReader:
@@ -212,18 +213,24 @@ class ArchiveReader:
         if not (layout.daily or layout.monthly or layout.yearly):
             add(layout.entries, False)
             older: set[str] = set()  # families already read back past the month
+            undated: set[str] = set()  # families whose entries carry no date: nothing to pick by
+            dated_any = any(e["published_at"] for e in layout.entries)
             for loc, lastmod in sorted(layout.undated, key=_newest_first):
                 family = _family(loc)
-                if family in older or (lastmod is not None and lastmod < start):
-                    continue  # its newest entry is older than the month
+                if family in older or family in undated or (lastmod is not None and lastmod < start):
+                    continue  # its newest entry is older than the month, or it has no dates
                 parsed = await self._cached(loc)
                 if parsed is None:
                     continue
                 result.files += 1
                 add(parsed[1], False)
                 dates = [e["published_at"] for e in parsed[1] if e["published_at"]]
-                if dates and max(dates) < start:
+                dated_any = dated_any or bool(dates)
+                if parsed[1] and not dates:
+                    undated.add(family)  # the rest of the series is the same: don't read it
+                elif dates and max(dates) < start:
                     older.add(family)  # numbered oldest first: the lower numbers are older still
+            result.undated = not dated_any and bool(undated or layout.entries)
         result.candidates = list(found.values())
         return result
 

@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
+from zoneinfo import ZoneInfo
 
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
+from ..adapters import find_adapter
 from ..config import Source
+from ..extract import extract
 from ..fetch import Fetcher
 from ..urls import article_id, canonicalize, host_of
 from . import Candidate
-from .listing import discover_listing
+from .listing import discover_listing, parse_listing
 from .sitemap import parse_dt
 
 if TYPE_CHECKING:
@@ -40,6 +44,9 @@ _MAX_SLUG_CHARS = 40
 _MAX_TEXT_CHARS = 30
 _MAX_TEXT_WORDS = 4
 _MAX_PRINT_LINKS = 3
+
+_DHAKA = ZoneInfo("Asia/Dhaka")
+log = logging.getLogger(__name__)
 
 _PAGE_KEYS = ("page", "pg", "p", "paged", "pageno", "page_no")
 _PATH_PAGE = re.compile(r"/page/(\d+)$")
@@ -187,15 +194,60 @@ def _url_day_end(url: str) -> datetime | None:
         return None
 
 
-def page_is_past_window(html: str, cutoff: datetime, urls: list[str] = ()) -> bool:
-    """True when most dated items on the page are older than cutoff.
-
-    Dates come from <time datetime> elements, else from dates in the article URLs.
-    """
+def page_dates(html: str, urls: list[str] = ()) -> list[datetime]:
+    """Dates on a listing page: <time datetime> elements, else dates in the article URLs."""
     dates = [d for node in HTMLParser(html).css("time[datetime]") if (d := parse_dt(node.attributes.get("datetime")))]
-    if not dates:
-        dates = [d for u in urls if (d := _url_day_end(u))]
+    return dates or [d for u in urls if (d := _url_day_end(u))]
+
+
+def page_is_past_window(html: str, cutoff: datetime, urls: list[str] = ()) -> bool:
+    """True when most dated items on the page are older than cutoff."""
+    dates = page_dates(html, urls)
     return bool(dates) and sum(d < cutoff for d in dates) * 2 > len(dates)
+
+
+def _is_old(published: datetime, date_only: bool, cutoff: datetime) -> bool:
+    """Before the window; a bare day only when its whole day (in Dhaka) is before it."""
+    if date_only:
+        return published.date() < cutoff.astimezone(_DHAKA).date()
+    return published < cutoff
+
+
+async def _probe(fetcher: Fetcher, c: Candidate) -> tuple[datetime, bool] | None:
+    """Download one listed article and read its publication date. The page is kept on the
+    candidate for the pipeline; an old one also gets its date, so it is filtered out."""
+    if find_adapter(c.url) is not None:
+        return None
+    resp = await fetcher.get(c.url, "article")
+    if resp is None or "html" not in resp.headers.get("content-type", "html"):
+        return None
+    try:
+        ex = await asyncio.to_thread(extract, resp.text, str(resp.url))
+    except Exception as exc:  # the pipeline will try again and record the failure
+        log.debug("date probe could not extract %s: %r", c.url, exc)
+        return None
+    c.prefetched = (resp.text, ex)
+    if ex.published_at is None:
+        return None
+    return ex.published_at, ex.date_only
+
+
+async def probe_past_window(fetcher: Fetcher, items: list[Candidate], cutoff: datetime, sample: int) -> bool:
+    """For a listing page without dates: True when its last `sample` articles are all older
+    than cutoff. The bottom of the page is checked, not the top, because local sites often
+    pin older stories above the newest ones."""
+    picked = items[-sample:] if sample > 0 else []
+    verdicts = []
+    for c in picked:
+        found = await _probe(fetcher, c)
+        if found is None:
+            continue
+        published, date_only = found
+        old = _is_old(published, date_only, cutoff)
+        if old:
+            c.published_at = published.astimezone(timezone.utc)
+        verdicts.append(old)
+    return bool(verdicts) and len(verdicts) >= min(2, len(picked)) and all(verdicts)
 
 
 async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str, cutoff: datetime,
@@ -206,10 +258,16 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
     Returns (candidates, sections, pages scanned). Paging stops when most of a page's dated
     items are older than cutoff, when at least half its links were seen on an earlier run
     (the previous daily run), when a page brings nothing new, or at max_pages (a safety cap).
+    A regional outlet's page without dates is judged by downloading its last few articles.
     """
     settings = settings or {}
     limit = int(settings.get("max_per_source", 60))
     max_pages = int(settings.get("max_pages", 20))
+    probe = int(settings.get("date_probe", 3)) if source.type == "regional" else 0
+    # Links on the homepage are left out of the probe: "latest" / "most read" widgets repeat
+    # them on every page, so they say nothing about where a tab's list has got to.
+    on_homepage = {article_id(c.url) for c in await asyncio.to_thread(
+        parse_listing, homepage_html, source.homepage, source.homepage, source.id)} if probe and homepage_html else set()
     candidates = list(source.sections)
     if settings.get("auto_discover", True) and source.auto_sections and homepage_html:
         candidates += await asyncio.to_thread(find_print_links, homepage_html, source.homepage, source.homepage)
@@ -240,7 +298,15 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
             old = memory.seen_before(source.id, ids) if memory is not None else 0
             if memory is not None:
                 memory.record(source.id, ids)
-            if old * 2 >= len(ids) or await asyncio.to_thread(page_is_past_window, html, cutoff, [c.url for c in items]):
+            if old * 2 >= len(ids):
                 break
+            urls = [c.url for c in items]
+            if await asyncio.to_thread(page_dates, html, urls):
+                if await asyncio.to_thread(page_is_past_window, html, cutoff, urls):
+                    break
+            elif probe:
+                listed = [c for c in items if article_id(c.url) in new and article_id(c.url) not in on_homepage]
+                if await probe_past_window(fetcher, listed, cutoff, probe):
+                    break
             url = await asyncio.to_thread(find_next_page, html, url)
     return out, sections, pages

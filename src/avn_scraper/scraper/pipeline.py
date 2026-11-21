@@ -66,6 +66,7 @@ def _merge(candidates: list[Candidate]) -> dict[str, Candidate]:
         if len(c.summary) > len(m.summary):
             m.summary = c.summary
         m.published_at = m.published_at or c.published_at
+        m.prefetched = m.prefetched or c.prefetched
         if m.source_id.startswith("web:") and not c.source_id.startswith("web:"):
             m.source_id = c.source_id
     return merged
@@ -109,6 +110,9 @@ def _keyword_hits(classifier: Classifier, candidates: dict[str, Candidate]) -> d
 
 async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | None, Extracted | None]:
     """Download and extract one article. On failure the reason is in fetcher.failures[c.url]."""
+    if c.prefetched is not None:  # downloaded by the listing date probe
+        html, ex = c.prefetched
+        return c, html, ex
     adapter = find_adapter(c.url)
     if adapter is not None:
         site, api_url = adapter

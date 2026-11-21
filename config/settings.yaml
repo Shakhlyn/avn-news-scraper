@@ -53,6 +53,7 @@ sections:
   auto_discover: true
   max_per_source: 60   # safety cap on tabs per outlet
   max_pages: 20        # safety cap on pages per tab
+  date_probe: 3        # regional outlets: a tab page without dates is judged by its last 3 articles (0 = off)
 
 # Backfill of past months (`avn backfill 2025-05`). Old articles come from the outlets'
 # archive sitemaps. A backfill runs for hours, so each site is read more slowly than in

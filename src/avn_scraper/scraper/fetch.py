@@ -324,7 +324,8 @@ class Fetcher:
             if len(body) > self.max_bytes:
                 raise ResponseTooLarge(url)
             # The body is decoded now; drop the encoding headers to match.
-            headers = [(k, v) for k, v in r.headers.multi_items() if k.lower() not in _DROP_HEADERS]
+            # Raw bytes: a header with non-ASCII text (a Bangla site name) can't be re-encoded as str.
+            headers = [(k, v) for k, v in r.headers.raw if k.decode("latin-1").lower() not in _DROP_HEADERS]
             return httpx.Response(r.status_code, headers=headers, content=bytes(body), request=r.request)
 
     async def _get_impersonated(self, url: str) -> httpx.Response:
@@ -354,7 +355,7 @@ class Fetcher:
                     body += chunk
                     if len(body) > self.max_bytes:
                         raise ResponseTooLarge(url)
-                kept = [(k, v) for k, v in r.headers.multi_items()
+                kept = [(k.encode("utf-8"), v.encode("utf-8")) for k, v in r.headers.multi_items()
                         if v is not None and k.lower() not in _DROP_HEADERS]
                 return httpx.Response(r.status_code, headers=kept, content=bytes(body),
                                       request=httpx.Request("GET", url))

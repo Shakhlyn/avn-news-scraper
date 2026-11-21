@@ -118,3 +118,12 @@ def test_peer_address_checked_after_connect():
 
     resp, stats = _fetch(handler, "http://93.184.215.14/rebind")
     assert resp is None and stats["BlockedURL"] == 1
+
+
+def test_non_ascii_response_header_is_kept():
+    # ajkerbhola sends its Bangla name in a header; rebuilding the response must not crash
+    def handler(request):
+        return httpx.Response(200, stream=_Stream(b"<html>ok</html>"),
+                              headers=[(b"content-type", b"text/html"), (b"x-site", "আজকের ভোলা".encode())])
+    resp, _ = _fetch(handler, "https://93.184.216.34/")
+    assert resp is not None and resp.text == "<html>ok</html>"
