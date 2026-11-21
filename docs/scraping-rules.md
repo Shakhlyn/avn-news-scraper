@@ -12,6 +12,7 @@ and outlets in `config/sources.yaml`.
   Nothing older is kept, so news is not repeated across days.
 - If a day was missed (PC off, run failed), catch up with `avn run --since 48`, or with
   24 × the number of days missed.
+- Older news (past months, years) is scraped on demand with `avn backfill` (see below).
 - An article is stored once. Links that were downloaded and didn't match are remembered
   and not downloaded again.
 
@@ -132,6 +133,61 @@ A banned IP also stops every later test, so the scraper backs off before a site 
 - To diagnose a site, probe it with a handful of spaced requests, never a crawl: a 403 with
   `cf-mitigated: challenge` means try `fetch: impersonate`; a challenge even then needs a
   real browser (not built); a timeout or 403 only from one machine means an IP block.
+
+## Backfill: past months (`avn backfill`)
+
+The daily run only looks back 24 hours. Past months are scraped on demand:
+
+```
+avn backfill 2025-05                  # one month
+avn backfill 2025-05 2025-08          # several months
+avn backfill 2025-01..2025-06         # a range
+avn backfill 2025                     # a whole year (this year: up to yesterday)
+avn backfill 2024-11..2026-10 --sources prothomalo,samakal --dry-run
+avn backfill --status                 # what is done, partial, left to retry
+```
+
+- **Where old articles come from:** each outlet's archive sitemaps, found from `robots.txt`
+  (or `/sitemap.xml`). Outlets split them by date: one file per day
+  (`sitemap-daily-2025-05-01.xml`, `daily-sitemap/2025-05-01/sitemap.xml`), per month
+  (`2025-05-01.xml`, `archive_2025-05-01.xml`) or per year (`sitemaps/2025/sitemap-2025-1.xml`).
+  The index usually lists only recent files, so the URL pattern is learned from those and
+  filled in for the month asked for (`discover/archive.py`). WordPress-style numbered files
+  (`post-sitemap12.xml`) are read newest first by `lastmod`, stopping at the first file older
+  than the month. Homepages, tabs and RSS are not used: they only show recent news.
+- **Which entries:** entries of a file named after the month all belong to it. In yearly and
+  WordPress files, an entry is kept when its `lastmod` is in the month or up to 31 days after
+  (an article edited much later can be missed). The article's own date then decides: one
+  published more than a day outside the month is not saved.
+- **Pre-filter:** on the sitemap's headline (`news:title`) or a headline slug in the URL
+  (`.../3-banks-get-emergency-funds-3789026`, Bangla slugs too). Entries with neither (URL ends
+  in an id, like Prothom Alo's `/uyrdgbm7hw`) can't be judged without downloading them:
+  `backfill.untitled: download` (default, complete but slower) or `skip`, or `--untitled`.
+  Untitled links in video, photo, gallery, live, podcast and horoscope sections are never downloaded.
+- **Same rules as the daily run** after that: classification, aliases, districts, story
+  clusters (against articles published within 3 days), raw page storage. No per-outlet cap.
+  Links an earlier daily run skipped only for being too old are not skipped here, and the
+  backfill never marks a link as too old.
+- **Politeness:** one site at a time is read `backfill.per_host_delay` (2 s, plus jitter)
+  apart, slower than the daily run because a backfill runs for hours. The block breaker,
+  cooldown and Chrome fingerprint apply as in the daily run. Each month is one run in the
+  block log (`<time>_backfill.jsonl`).
+- **Next to the daily run:** a backfill has its own lock (`data/.backfill.lock`, one at a time).
+  While the daily scrape or `avn run` holds the run lock it pauses, so the two never hit a
+  site together. Backfill runs are saved in `runs` with `stats.backfill`, and never count as
+  the daily run (the scheduler and `--since-last-run` ignore them).
+- **Resuming:** progress is kept per outlet and month in `backfill_progress`: `done`,
+  `no_archive` (no dated sitemaps found: nothing to do), `partial` (the site was stopped or
+  on cooldown, downloads failed temporarily, or the month isn't over) or `failed` (sitemap
+  not reachable). Articles are saved one by one. Run the same command again: `done` and
+  `no_archive` are skipped, the rest retried, known links not downloaded again. `--redo`
+  repeats done months.
+- **Not possible from sitemaps (2026-11 probe):** janakantha, ntv, observerbd, unb, rtv and
+  ekhontv have no sitemap; jamunatv and dailysun daily sitemaps list `#` instead of links;
+  gramerkagoj's article sitemaps carry no dates.
+- **Cost:** a big outlet has 100-300 articles a day. With headlines, only keyword hits are
+  downloaded; without, every article is (about 3,000-9,000 a month at 2 s each, all outlets
+  in parallel). Try one month with `--dry-run` before a long range.
 
 ## Known limits
 

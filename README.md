@@ -34,6 +34,8 @@ avn run --dry-run            # same, but only print what would be saved
 avn run --since 72           # look back 72 hours instead of the default 24
 avn run --sources prothomalo,dailystar
 avn run --catchall           # also use the search catch-all for this run
+avn backfill 2025-05         # scrape a past month (also 2025-05 2025-07, 2025-01..2025-06, 2025)
+avn backfill --status        # backfill progress per month
 avn check-sources            # which outlets work, and through which feed/sitemap
 avn check-sources --refresh  # re-discover feeds/sitemaps
 avn reclassify               # re-apply keywords.yaml to stored articles (no network)
@@ -44,6 +46,10 @@ avn serve                    # the service: API + daily scrape (or ./serve.sh)
 ```
 
 Use `.venv/bin/avn`, or activate the venv first.
+
+`avn backfill` reads past months from the outlets' archive sitemaps, next to the daily run (it
+pauses while that runs) and resumes where it stopped. Try one month with `--dry-run` first: a
+month can take hours. Rules and limits: `docs/scraping-rules.md`, "Backfill".
 
 ## How it works
 
@@ -91,6 +97,7 @@ CSV files are UTF-8 with BOM, so Excel displays Bangla correctly.
 - `v_matches`: view joining the two, one row per article and category. Start here.
 - `review`: your manual verdicts (`verified` = 1 relevant / 0 false positive, `notes`)
 - `accepted`: stories accepted on the AVN site's `/dashboard`, each a copy of the story at that moment
+- `backfill_progress`: per outlet and month, how far `avn backfill` got (`done`, `partial`, ...)
 - `sources`, `runs`, `seen_urls`, `schema_migrations`
 
 ```sql

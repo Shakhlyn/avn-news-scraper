@@ -48,6 +48,18 @@ sections:
   max_per_source: 60   # safety cap on tabs per outlet
   max_pages: 20        # safety cap on pages per tab
 
+# Backfill of past months (`avn backfill 2025-05`). Old articles come from the outlets'
+# archive sitemaps. A backfill runs for hours, so each site is read more slowly than in
+# the daily run; the block breaker and cooldown above still apply. It waits while the
+# daily scrape runs. See docs/scraping-rules.md.
+backfill:
+  per_host_delay: 2.0     # seconds between requests to one site (plus per_host_jitter)
+  # Sitemap entries with no headline (no title, URL ends in an id such as Prothom Alo's
+  # /uyrdgbm7hw) can't be keyword-filtered: download them to judge (complete, slower)
+  # or skip them.
+  untitled: download      # download | skip
+  pause_poll_seconds: 30  # how often a paused backfill checks if the daily scrape ended
+
 # Keep the auto-discovered feed/sitemap URLs this many days before re-discovering.
 endpoint_cache_days: 7
 

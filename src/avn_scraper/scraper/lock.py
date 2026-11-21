@@ -31,3 +31,18 @@ def run_lock(path: Path) -> Iterator[None]:
         yield
     finally:
         fh.close()
+
+
+def is_locked(path: Path) -> bool:
+    """True while another process holds the lock at path (a scrape is running)."""
+    try:
+        fh = open(path, "a+")
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        fh.close()  # closing also releases a lock we just took
+    return False

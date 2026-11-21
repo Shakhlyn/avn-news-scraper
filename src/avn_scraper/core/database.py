@@ -27,5 +27,5 @@ async def fetch_one(conn: psycopg.AsyncConnection, sql: Any, params: Any = None)
 async def last_full_run(pool: AsyncConnectionPool) -> datetime | None:
     async with pool.connection() as conn:
         row = await fetch_one(conn, "SELECT max(started_at) AS at FROM runs WHERE finished_at IS NOT NULL "
-                                    "AND stats->'only_sources' IS NULL")
+                                    "AND stats->'only_sources' IS NULL AND stats->'backfill' IS NULL")
     return row["at"]

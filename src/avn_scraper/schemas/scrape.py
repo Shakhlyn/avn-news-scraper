@@ -22,3 +22,4 @@ class Run(BaseModel):
     finished_at: datetime | None
     outcome: dict[str, Any] | None
     only_sources: list[str] | None
+    backfill: dict[str, Any] | None = None  # set for `avn backfill` runs: {"month": "2025-05"}

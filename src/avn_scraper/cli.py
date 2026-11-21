@@ -1,4 +1,4 @@
-"""Command line: `avn run`, `avn check-sources`, `avn export`, `avn reclassify`, `avn stats`,
+"""Command line: `avn run`, `avn backfill`, `avn check-sources`, `avn export`, `avn reclassify`, `avn stats`,
 `avn migrate`, `avn import-sqlite`, `avn serve`."""
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pydantic_settings import SettingsError
 from rich.console import Console
 from rich.table import Table
 
+from .scraper.backfill import BackfillOptions, MonthResult, parse_months, run_backfill
 from .scraper.classify import Classifier
 from .scraper.config import load_config
 from .scraper.discover.sources import EndpointCache, ListingMemory, discover_source
@@ -112,6 +113,117 @@ def run(
                           ", ".join(f"{c['category']}({c['score']})" for c in r["categories"]),
                           r["title"][:90])
         console.print(table)
+
+
+def _print_month(r: MonthResult) -> None:
+    if r.skipped:
+        console.print(f"[dim]{r.month:%Y-%m}: already done for every outlet (--redo to repeat)[/]")
+        return
+    statuses = Counter(s["status"] for s in r.sources.values())
+    candidates = sum(s.get("candidates", 0) for s in r.sources.values())
+    selected = sum(s.get("selected", 0) for s in r.sources.values())
+    console.print(f"[bold]{r.month:%Y-%m}[/] in {r.duration / 60:.1f} min: {candidates} in archives, "
+                  f"{selected} downloaded, saved {r.outcome.get('saved', 0)} - outlets {dict(statuses)}")
+    for sid, s in sorted(r.sources.items()):
+        if s["status"] in ("failed", "partial"):
+            why = s.get("error") or ("block cooldown / stopped" if s.get("temporary_failures") else "month not over")
+            console.print(f"  [yellow]{sid}: {s['status']}[/] ({why})")
+    for host, why in r.stopped.items():
+        console.print(f"  [red]Not fetched: {host}: {why}[/]")
+
+
+@app.command()
+def backfill(
+    months: Optional[list[str]] = typer.Argument(
+        None, help="Months to scrape: 2025-05 | 2025-05 2025-07 | 2025-01..2025-06 | 2025 (a whole year)"),
+    sources: Optional[str] = typer.Option(None, help="Comma separated source ids to limit the backfill"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Do everything except saving; print matches"),
+    redo: bool = typer.Option(False, "--redo", help="Also redo outlet-months already done"),
+    untitled: Optional[str] = typer.Option(None, help="Entries with no headline: download | skip "
+                                                      "(default: settings backfill.untitled)"),
+    status: bool = typer.Option(False, "--status", help="Show backfill progress and exit"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[Path] = ConfigOpt,
+) -> None:
+    """Scrape past months from the outlets' archive sitemaps. Resumable; waits while the daily scrape runs."""
+    _setup_logging(verbose)
+    cfg = load_config(config)
+    today = datetime.now(ZoneInfo(cfg.timezone)).date()
+    try:
+        wanted = parse_months(months, today) if months else None
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    if status:
+        _backfill_status(cfg, wanted, _split(sources))
+        return
+    if not wanted:
+        console.print("[red]Give the months, e.g. `avn backfill 2025-05` or `avn backfill 2024-11..2026-10`.[/]")
+        raise typer.Exit(2)
+    opts = BackfillOptions(months=wanted, only_sources=_split(sources), dry_run=dry_run, redo=redo,
+                           untitled=untitled)
+    console.print(f"Backfilling {len(wanted)} month(s): {wanted[0]:%Y-%m} .. {wanted[-1]:%Y-%m}"
+                  + (" (dry run)" if dry_run else ""))
+    try:
+        with run_lock(cfg.data_dir / ".backfill.lock"):
+            results = asyncio.run(run_backfill(cfg, opts, on_month=_print_month))
+    except RunInProgress as exc:
+        console.print(f"[yellow]A backfill is already running ({exc}).[/]")
+        raise typer.Exit(1)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(2)
+    except DatabaseUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except psycopg.OperationalError as exc:
+        console.print(f"[red]Lost the database during the backfill ({exc}). Run the same command again "
+                      "once it is back; finished months are kept.[/]")
+        raise typer.Exit(1)
+    saved = [rec for r in results for rec in r.saved]
+    console.print(f"Done: {len(saved)} articles {'would be saved' if dry_run else 'saved'}. "
+                  "Run the same command again to retry outlets that were partial or failed.")
+    if dry_run and saved:
+        table = Table("date", "source", "categories", "title", title="Would save (dry run)")
+        for rec in saved[:200]:
+            table.add_row(rec["published_date"], rec["source_name"],
+                          ", ".join(f"{c['category']}({c['score']})" for c in rec["categories"]), rec["title"][:90])
+        console.print(table)
+
+
+def _backfill_status(cfg, months, only) -> None:
+    async def go():
+        storage = await _storage(cfg)
+        try:
+            return await storage.backfill_progress(months)
+        finally:
+            await storage.close()
+
+    rows = [r for r in asyncio.run(go()) if not only or r["source_id"] in only]
+    if not rows:
+        console.print("No backfill progress yet.")
+        return
+    if only:
+        table = Table("month", "source", "status", "layout", "in archive", "downloaded", "saved", "updated")
+        for r in rows:
+            table.add_row(f"{r['month']:%Y-%m}", r["source_id"], r["status"], r["layout"] or "-",
+                          str(r["candidates"]), str(r["downloaded"]), str(r["saved"]), f"{r['updated_at']:%Y-%m-%d %H:%M}")
+        console.print(table)
+        return
+    per: dict[date, dict] = {}
+    for r in rows:
+        p = per.setdefault(r["month"], {"status": Counter(), "saved": 0, "downloaded": 0, "todo": []})
+        p["status"][r["status"]] += 1
+        p["saved"] += r["saved"] or 0
+        p["downloaded"] += r["downloaded"] or 0
+        if r["status"] in ("partial", "failed"):
+            p["todo"].append(r["source_id"])
+    table = Table("month", "done", "no archive", "partial / failed", "downloaded", "saved", "to retry")
+    for m, p in sorted(per.items()):
+        st = p["status"]
+        table.add_row(f"{m:%Y-%m}", str(st["done"]), str(st["no_archive"]), str(st["partial"] + st["failed"]),
+                      str(p["downloaded"]), str(p["saved"]), ", ".join(p["todo"][:8]) + (" ..." if len(p["todo"]) > 8 else ""))
+    console.print(table)
 
 
 async def _sync_block_logs(cfg, quiet: bool = False) -> list[str]:

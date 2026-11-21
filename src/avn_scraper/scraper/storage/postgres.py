@@ -124,13 +124,35 @@ class PostgresStorage(Storage):
                 [(s.id, s.name, s.language, s.type, s.district, s.homepage) for s in sources],
             )
 
-    async def known_ids(self, ids: Iterable[str]) -> set[str]:
+    async def known_ids(self, ids: Iterable[str], *, include_old: bool = True) -> set[str]:
         ids = list(ids)
+        old = "" if include_old else " AND status <> 'old'"
         rows = await fetch_all(
             self.conn,
-            "SELECT id FROM articles WHERE id = ANY(%(ids)s) UNION SELECT id FROM seen_urls WHERE id = ANY(%(ids)s)",
+            "SELECT id FROM articles WHERE id = ANY(%(ids)s) "
+            f"UNION SELECT id FROM seen_urls WHERE id = ANY(%(ids)s){old}",
             {"ids": ids})
         return {r["id"] for r in rows}
+
+    async def titles_published(self, start: datetime, end: datetime) -> list[tuple[str, str, str]]:
+        rows = await fetch_all(
+            self.conn, "SELECT id, story_cluster_id, title FROM articles WHERE published_at >= %s "
+                       "AND published_at < %s", (start, end))
+        return [(r["id"], r["story_cluster_id"], r["title"]) for r in rows]
+
+    async def backfill_progress(self, months: Iterable[Any] | None = None) -> list[dict[str, Any]]:
+        if months is None:
+            return await fetch_all(self.conn, "SELECT * FROM backfill_progress ORDER BY month, source_id")
+        return await fetch_all(self.conn, "SELECT * FROM backfill_progress WHERE month = ANY(%s) "
+                                          "ORDER BY month, source_id", (list(months),))
+
+    async def save_backfill_progress(self, row: dict[str, Any]) -> None:
+        cols = ("source_id", "month", "status", "layout", "candidates", "downloaded", "saved", "stats", "run_id")
+        values = [Jsonb(row.get(c)) if c == "stats" else row.get(c) for c in cols]
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols[2:])
+        await self.conn.execute(
+            f"INSERT INTO backfill_progress({','.join(cols)}, updated_at) VALUES ({','.join(['%s'] * len(cols))}, now()) "
+            f"ON CONFLICT(source_id, month) DO UPDATE SET {updates}, updated_at=now()", values)
 
     async def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
         now = datetime.now(timezone.utc)
@@ -197,7 +219,7 @@ class PostgresStorage(Storage):
     async def last_full_run(self) -> datetime | None:
         """When the last finished run over all outlets started."""
         row = await fetch_one(self.conn, "SELECT max(started_at) AS at FROM runs WHERE finished_at IS NOT NULL "
-                                         "AND stats->'only_sources' IS NULL")
+                                         "AND stats->'only_sources' IS NULL AND stats->'backfill' IS NULL")
         return row["at"]
 
     async def known_block_logs(self) -> set[str]:

@@ -129,6 +129,120 @@ def lookback_hours(window: float, last_run: datetime | None, now: datetime) -> f
     return max(window, (now - last_run).total_seconds() / 3600)
 
 
+@dataclass
+class Verdict:
+    """What to do with one downloaded (or failed) candidate."""
+    outcome: str  # saved | fetch_failed | too_old | too_new | no_match | duplicate
+    record: dict[str, Any] | None = None
+    html: str | None = None
+    seen: list[tuple[str, str, str]] = field(default_factory=list)  # rows for seen_urls
+    failed: dict[str, str] | None = None
+
+
+@dataclass
+class Judge:
+    """Turns a download into an article record: date window, classification, aliases,
+    districts and story cluster. Shared by the daily run and the backfill."""
+    classifier: Classifier
+    storage: Storage
+    tz: ZoneInfo
+    run_id: str
+    by_id: dict[str, Source]
+    recent: list[tuple[str, str, str]]  # (id, cluster, title) to cluster against
+    window_from: datetime
+    window_to: datetime | None = None  # backfill only: articles from later are skipped
+    mark_old: bool = True  # daily run: remember too-old links; a backfill must not
+    saved_ids: set[str] = field(default_factory=set)
+    scraped_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    async def article(self, c: Candidate, html: str | None, ex: Extracted | None, reason: str) -> Verdict:
+        cid = article_id(c.url)
+        fetch_ok = ex is not None
+        reason = None if fetch_ok else reason
+        # Permanently blocked pages (403, robots.txt, ...) are judged on the headline we
+        # already have and not retried; temporary failures are retried tomorrow unless
+        # the feed gave us a summary to judge by.
+        permanent = reason in _PERMANENT_FAILURES
+        failed = None if fetch_ok else {"url": c.url, "reason": reason}
+        if not fetch_ok and (not c.title or not (permanent or c.summary)):
+            return Verdict("fetch_failed", seen=[(cid, c.url, reason)] if permanent else [], failed=failed)
+        ex = ex or Extracted(c.title, "", c.summary, "", None, None, None)
+        published = ex.published_at or c.published_at
+        if published and published > self.scraped_at + timedelta(minutes=15):
+            # Some sites label Dhaka wall-clock time as UTC; read it as local time.
+            published = published.replace(tzinfo=self.tz)
+        if published:
+            published = published.astimezone(timezone.utc)
+        if published and published < self.window_from:
+            return Verdict("too_old", seen=[(cid, c.url, "old")] if self.mark_old else [], failed=failed)
+        if published and self.window_to and published >= self.window_to:
+            return Verdict("too_new", failed=failed)
+
+        title = ex.title or c.title
+        summary = ex.summary or c.summary
+        matches = await asyncio.to_thread(self.classifier.classify, title, ex.body, summary)
+        if not matches:
+            if fetch_ok or permanent:
+                return Verdict("no_match", seen=[(cid, c.url, "no_match" if fetch_ok else f"no_match ({reason})")],
+                               failed=failed)
+            return Verdict("fetch_failed", failed=failed)  # retried next run with the full text
+
+        seen: list[tuple[str, str, str]] = []
+        canonical = ex.canonical_url if ex.canonical_url and same_site(ex.canonical_url, c.url) else c.url
+        aid = article_id(canonical)
+        if aid != cid:
+            seen.append((cid, c.url, f"alias:{aid}"))
+            if aid in self.saved_ids or aid in await self.storage.known_ids([aid]):
+                return Verdict("duplicate", seen=seen, failed=failed)
+
+        src = self.by_id.get(c.source_id)
+        district, mentioned = await asyncio.to_thread(detect_districts, title, ex.body or summary)
+        cluster = await asyncio.to_thread(find_cluster, title, self.recent) or aid
+        self.recent.append((aid, cluster, title))
+        record = {
+            "id": aid,
+            "url": c.url,
+            "canonical_url": canonical,
+            "source_id": c.source_id,
+            "source_name": src.name if src else host_of(c.url),
+            "source_type": src.type if src else "web",
+            "language": src.language if src else detect_language(f"{title} {ex.body}"),
+            "title": title,
+            "summary": summary,
+            "body": ex.body,
+            "author": ex.author,
+            "image": ex.image,
+            "published_at": published.isoformat() if published else None,
+            "published_date": (published or self.scraped_at).astimezone(self.tz).date().isoformat(),
+            "scraped_at": self.scraped_at.isoformat(timespec="seconds"),
+            "discovered_via": c.via,
+            "district": district or (src.district if src else None),
+            "districts_mentioned": mentioned,
+            "story_cluster_id": cluster,
+            "body_missing": not ex.body,
+            "categories": [asdict(m) for m in matches],
+            "run_id": self.run_id,
+        }
+        return Verdict("saved", record=record, html=html, seen=seen, failed=failed)
+
+
+async def _save(storage: Storage, verdict: Verdict, dry_run: bool, outcome: Counter[str]) -> bool:
+    """Store a matched article (not on a dry run). False if the database refused it."""
+    if not dry_run:
+        try:
+            await storage.save_article(verdict.record, verdict.html)
+        except psycopg.OperationalError:
+            raise  # the database went away: stop, the next run covers these articles
+        except psycopg.Error as exc:
+            log.error("could not save %s: %r", verdict.record["url"], exc)
+            outcome["db_failed"] += 1
+            return False
+    outcome["saved"] += 1
+    if verdict.record["body_missing"]:
+        outcome["saved_headline_only"] += 1
+    return True
+
+
 async def run_pipeline(cfg: Config, opts: RunOptions,
                        transport: httpx.AsyncBaseTransport | None = None) -> RunResult:
     """Fails before any web request if the database cannot be used."""
@@ -217,102 +331,27 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         failures = dict(fetcher.failures)
 
     # 4. classify, cluster, store
-    recent = await storage.recent_titles(days=3)
+    judge = Judge(classifier=classifier, storage=storage, tz=tz, run_id=run_id, by_id=by_id,
+                  recent=await storage.recent_titles(days=3), window_from=cutoff)
     saved: list[dict[str, Any]] = []
     seen_rows: list[tuple[str, str, str]] = []
     outcome: Counter[str] = Counter()
     failed: list[dict[str, str]] = []
     by_category: Counter[str] = Counter()
-    scraped_at = datetime.now(timezone.utc)
 
     for c, html, ex in fetched:
-        cid = article_id(c.url)
-        fetch_ok = ex is not None
-        reason = None if fetch_ok else failures.get(c.url, "network_error")
-        # Permanently blocked pages (403, robots.txt, ...) are judged on the headline we
-        # already have and not retried; temporary failures are retried tomorrow unless
-        # the feed gave us a summary to judge by.
-        permanent = reason in _PERMANENT_FAILURES
-        if not fetch_ok:
-            failed.append({"url": c.url, "reason": reason})
-            if not c.title or not (permanent or c.summary):
-                outcome["fetch_failed"] += 1
-                if permanent:
-                    seen_rows.append((cid, c.url, reason))
-                continue
-        ex = ex or Extracted(c.title, "", c.summary, "", None, None, None)
-        published = ex.published_at or c.published_at
-        if published and published > scraped_at + timedelta(minutes=15):
-            # Some sites label Dhaka wall-clock time as UTC; read it as local time.
-            published = published.replace(tzinfo=tz)
-        if published:
-            published = published.astimezone(timezone.utc)
-        if published and published < cutoff:
-            outcome["too_old"] += 1
-            seen_rows.append((cid, c.url, "old"))
+        verdict = await judge.article(c, html, ex, failures.get(c.url, "network_error"))
+        seen_rows += verdict.seen
+        if verdict.failed:
+            failed.append(verdict.failed)
+        if verdict.record is None:
+            outcome[verdict.outcome] += 1
             continue
-
-        title = ex.title or c.title
-        summary = ex.summary or c.summary
-        matches = await asyncio.to_thread(classifier.classify, title, ex.body, summary)
-        if not matches:
-            if fetch_ok or permanent:
-                outcome["no_match"] += 1
-                seen_rows.append((cid, c.url, "no_match" if fetch_ok else f"no_match ({reason})"))
-            else:
-                outcome["fetch_failed"] += 1  # retried next run with the full text
+        if not await _save(storage, verdict, opts.dry_run, outcome):
             continue
-
-        canonical = ex.canonical_url if ex.canonical_url and same_site(ex.canonical_url, c.url) else c.url
-        aid = article_id(canonical)
-        if aid != cid:
-            seen_rows.append((cid, c.url, f"alias:{aid}"))
-            if aid in await storage.known_ids([aid]) or any(r["id"] == aid for r in saved):
-                outcome["duplicate"] += 1
-                continue
-
-        src = by_id.get(c.source_id)
-        district, mentioned = await asyncio.to_thread(detect_districts, title, ex.body or summary)
-        cluster = await asyncio.to_thread(find_cluster, title, recent) or aid
-        recent.append((aid, cluster, title))
-        record = {
-            "id": aid,
-            "url": c.url,
-            "canonical_url": canonical,
-            "source_id": c.source_id,
-            "source_name": src.name if src else host_of(c.url),
-            "source_type": src.type if src else "web",
-            "language": src.language if src else detect_language(f"{title} {ex.body}"),
-            "title": title,
-            "summary": summary,
-            "body": ex.body,
-            "author": ex.author,
-            "image": ex.image,
-            "published_at": published.isoformat() if published else None,
-            "published_date": (published or scraped_at).astimezone(tz).date().isoformat(),
-            "scraped_at": scraped_at.isoformat(timespec="seconds"),
-            "discovered_via": c.via,
-            "district": district or (src.district if src else None),
-            "districts_mentioned": mentioned,
-            "story_cluster_id": cluster,
-            "body_missing": not ex.body,
-            "categories": [asdict(m) for m in matches],
-            "run_id": run_id,
-        }
-        if not opts.dry_run:
-            try:
-                await storage.save_article(record, html)
-            except psycopg.OperationalError:
-                raise  # the database went away: stop, the next run covers these articles
-            except psycopg.Error as exc:
-                log.error("could not save %s: %r", c.url, exc)
-                outcome["db_failed"] += 1
-                continue
-        saved.append(record)
-        outcome["saved"] += 1
-        if not ex.body:
-            outcome["saved_headline_only"] += 1
-        by_category.update(m.category for m in matches)
+        judge.saved_ids.add(verdict.record["id"])
+        saved.append(verdict.record)
+        by_category.update(m["category"] for m in verdict.record["categories"])
 
     if not opts.dry_run:
         await storage.mark_seen(seen_rows)
