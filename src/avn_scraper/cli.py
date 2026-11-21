@@ -62,7 +62,9 @@ def run(
     since_last_run: bool = typer.Option(False, "--since-last-run", help="Look back to the last full run, at least window_hours"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Do everything except saving; print matches"),
     sources: Optional[str] = typer.Option(None, help="Comma separated source ids to limit the run"),
-    no_prefilter: bool = typer.Option(False, "--no-prefilter", help="Download every new article, not just keyword hits (slow)"),
+    prefilter: Optional[bool] = typer.Option(None, "--prefilter/--no-prefilter",
+                                             help="Download only links whose headline/summary/URL has a keyword "
+                                                  "(default: settings prefilter, off = every article)"),
     catchall: Optional[bool] = typer.Option(None, "--catchall/--no-catchall", help="Override search_catchall.enabled"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     config: Optional[Path] = ConfigOpt,
@@ -73,7 +75,7 @@ def run(
     if since is not None and since_last_run:
         console.print("[red]Use --since or --since-last-run, not both.[/]")
         raise typer.Exit(2)
-    opts = RunOptions(since_hours=since, since_last_run=since_last_run, dry_run=dry_run, prefilter=not no_prefilter,
+    opts = RunOptions(since_hours=since, since_last_run=since_last_run, dry_run=dry_run, prefilter=prefilter,
                       only_sources=_split(sources), catchall=catchall)
     try:
         with run_lock(cfg.data_dir / ".run.lock"):

@@ -39,7 +39,7 @@ class RunOptions:
     since_hours: float | None = None
     since_last_run: bool = False  # look back to the last full run, at least window_hours
     dry_run: bool = False
-    prefilter: bool = True
+    prefilter: bool | None = None  # None = settings.yaml `prefilter`
     only_sources: list[str] | None = None
     catchall: bool | None = None  # None = use settings.yaml
     export: bool = True
@@ -84,6 +84,23 @@ def _assign_sources(candidates: list[Candidate], sources: list[Source]) -> None:
 _PERMANENT_FAILURES = {"http_401", "http_403", "http_404", "http_410", "http_451", "robots_blocked",
                        "BlockedURL", "UnsupportedEncoding", "ResponseTooLarge", "not_html",
                        "extract_error", "adapter_error"}
+
+
+def _cap_per_source(candidates: list[Candidate], cap: Any, now: datetime) -> tuple[list[Candidate], dict[str, int]]:
+    """Newest first, at most `cap` per outlet. No cap (None or 0) keeps every one.
+    Returns the selection and, per outlet, how many were left out."""
+    if not cap:
+        return candidates, {}
+    per_source: Counter[str] = Counter()
+    selected: list[Candidate] = []
+    left_out: Counter[str] = Counter()
+    for c in sorted(candidates, key=lambda c: c.published_at or now, reverse=True):
+        if per_source[c.source_id] < int(cap):
+            per_source[c.source_id] += 1
+            selected.append(c)
+        else:
+            left_out[c.source_id] += 1
+    return selected, dict(left_out)
 
 
 def _keyword_hits(classifier: Classifier, candidates: dict[str, Candidate]) -> dict[str, Candidate]:
@@ -307,16 +324,14 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         known = await storage.known_ids(fresh.keys())
         new = {k: c for k, c in fresh.items() if k not in known}
         stats["new_candidates"] = len(new)
-        if opts.prefilter:
+        prefilter = bool(s.get("prefilter", False)) if opts.prefilter is None else opts.prefilter
+        if prefilter:
             new = await asyncio.to_thread(_keyword_hits, classifier, new)
-        cap = int(s.get("max_articles_per_source", 80))
-        per_source: Counter[str] = Counter()
-        selected: list[Candidate] = []
-        for c in sorted(new.values(), key=lambda c: c.published_at or started, reverse=True):
-            if per_source[c.source_id] < cap:
-                per_source[c.source_id] += 1
-                selected.append(c)
+        selected, capped = _cap_per_source(list(new.values()), s.get("max_articles_per_source"), started)
         stats["selected_for_fetch"] = len(selected)
+        if capped:
+            stats["capped"] = capped
+            log.warning("Per-outlet cap left out %d articles: %s", sum(capped.values()), capped)
         log.info("%d candidates, %d new, %d selected for download", len(merged), stats["new_candidates"], len(selected))
 
         # 3. fetch & extract

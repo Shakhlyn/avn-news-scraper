@@ -9,7 +9,8 @@ import pandas as pd
 import pytest
 
 from avn_scraper.scraper.config import Config, Source
-from avn_scraper.scraper.pipeline import RunOptions, run_pipeline
+from avn_scraper.scraper.discover import Candidate
+from avn_scraper.scraper.pipeline import RunOptions, _cap_per_source, run_pipeline
 from avn_scraper.scraper.storage import PostgresStorage
 
 SITE = "http://93.184.215.14"  # public IP literal: passes the SSRF guard without DNS
@@ -54,7 +55,6 @@ def make_config(tmp_path, keywords) -> Config:
     settings = {
         "timezone": "Asia/Dhaka", "data_dir": str(tmp_path), "window_hours": 24,
         "http": {"per_host_delay": 0, "retries": 0, "respect_robots": True},
-        "max_articles_per_source": 80,
     }
     source = Source(id="fake", name="Fake Daily", language="bn", type="national", homepage=SITE + "/")
     return Config(settings=settings, sources=[source], keywords=keywords, config_dir=tmp_path)
@@ -65,7 +65,7 @@ async def test_end_to_end_run(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords)
     requests: Counter = Counter()
 
-    result = await run_pipeline(config, RunOptions(), transport=make_site(requests))
+    result = await run_pipeline(config, RunOptions(prefilter=True), transport=make_site(requests))
     out = result.stats["outcome"]
 
     # 1: full article saved; 2: blocked (403) -> saved from its headline; 3: 503 -> retry later;
@@ -91,7 +91,7 @@ async def test_end_to_end_run(tmp_path, cfg, database):
 
     # second run: only the temporarily failed article is tried again
     requests.clear()
-    second = await run_pipeline(config, RunOptions(), transport=make_site(requests))
+    second = await run_pipeline(config, RunOptions(prefilter=True), transport=make_site(requests))
     assert requests["/news/1"] == 0 and requests["/news/2"] == 0 and requests["/news/3"] == 1
     assert second.stats["outcome"].get("saved", 0) == 0
 
@@ -136,3 +136,62 @@ def test_section_tabs_and_pagination(tmp_path, cfg, database):
     second = asyncio.run(run_pipeline(config, RunOptions(), transport=make_tab_site(requests)))
     assert requests["/national"] == 1 and requests["/national?page=2"] == 0
     assert second.stats["sources"]["fake"]["counts"]["section_pages"] == 1
+
+
+NO_KEYWORD_HOME = f"""<html><body>
+<a href="/news/5">Family demands justice for Patgram youth</a>
+<a href="/news/6">Stock market gains for the third straight day</a>
+</body></html>"""
+
+ARTICLE_5 = ARTICLE_1.replace("সীমান্তে বিএসএফের গুলিতে যুবক নিহত</h1>", "Family demands justice for Patgram youth</h1>")
+ARTICLE_6 = f"""<html><head><meta property="article:published_time" content="{NOW}"></head><body><article>
+<h1>Stock market gains for the third straight day</h1>
+<p>Shares rose on the Dhaka Stock Exchange for a third day as banks and telecoms led the gains.</p>
+<p>Turnover also increased, brokers said, with investors returning after the holiday.</p>
+</article></body></html>"""
+
+
+def make_plain_headline_site(requests: Counter):
+    pages = {"/": NO_KEYWORD_HOME, "/news/5": ARTICLE_5, "/news/6": ARTICLE_6}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests[request.url.path] += 1
+        html = pages.get(request.url.path)
+        if html is None:
+            return httpx.Response(404, stream=_Stream(b"no"))
+        return httpx.Response(200, stream=_Stream(html.encode()),
+                              headers={"Content-Type": "text/html; charset=utf-8"})
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.anyio
+async def test_default_downloads_every_article(tmp_path, cfg, database):
+    """A relevant story with a plain headline is found from its body; the rest are judged once."""
+    config = make_config(tmp_path, cfg.keywords)
+    requests: Counter = Counter()
+
+    result = await run_pipeline(config, RunOptions(), transport=make_plain_headline_site(requests))
+
+    assert requests["/news/5"] == 1 and requests["/news/6"] == 1
+    assert {r["url"] for r in result.saved} == {SITE + "/news/5"}
+    assert result.saved[0]["categories"][0]["category"] == "border_killing"
+    assert "capped" not in result.stats
+
+    requests.clear()
+    await run_pipeline(config, RunOptions(), transport=make_plain_headline_site(requests))
+    assert requests["/news/5"] == 0 and requests["/news/6"] == 0  # not downloaded twice
+
+
+def _cand(n: int, source: str = "a") -> Candidate:
+    return Candidate(url=f"{SITE}/news/{n}", source_id=source,
+                     published_at=datetime(2026, 11, 20, n, tzinfo=timezone.utc))
+
+
+def test_cap_per_source():
+    now = datetime(2026, 11, 20, 23, tzinfo=timezone.utc)
+    items = [_cand(n) for n in range(5)] + [_cand(9, "b")]
+    assert _cap_per_source(items, None, now) == (items, {})
+    assert _cap_per_source(items, 0, now) == (items, {})
+    selected, left_out = _cap_per_source(items, 2, now)
+    assert [c.url for c in selected if c.source_id == "a"] == [f"{SITE}/news/4", f"{SITE}/news/3"]
+    assert left_out == {"a": 3}

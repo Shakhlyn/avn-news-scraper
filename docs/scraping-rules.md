@@ -70,9 +70,16 @@ The very first run has no memory yet, so tabs without dates are read to the page
 
 ## What gets downloaded and kept
 
-- **Keyword pre-filter**: a link is downloaded only if its headline, summary or URL contains
-  a keyword from `config/keywords.yaml`. `--no-prefilter` downloads everything.
-- **Per-outlet cap**: at most `max_articles_per_source` (80) downloads per outlet per run.
+- **Every article is read**: every new link in the window, from every page of every tab,
+  the print edition, RSS and sitemaps, is downloaded once and judged on its full text, so a
+  story with a plain headline or deep in the print edition is not missed. Links already
+  stored or already judged (`seen_urls`) are not downloaded again.
+- **Keyword pre-filter (off)**: `prefilter: true` in `settings.yaml` (or `avn run --prefilter`)
+  downloads only links whose headline, summary or URL contains a keyword from
+  `config/keywords.yaml`. Faster, but misses stories whose headline has no keyword.
+- **No per-outlet cap**: `max_articles_per_source` is empty, so every article is downloaded.
+  Set a number to cap downloads per outlet per run (newest kept). Articles a cap leaves out
+  are counted in the run's stats as `capped` and logged as a warning.
 - **Classification**: the full text is scored against `keywords.yaml`. An article is kept
   only if it qualifies for a category. A strong term is required, and weak terms only add
   score.
