@@ -113,6 +113,10 @@ The very first run has no memory yet, so tabs without dates are read to the page
 - `robots.txt` is respected. Requests to each site go one at a time, `per_host_delay`
   (1 s) apart plus a random 0–50% (`per_host_jitter`), with retries.
 - Only public addresses are fetched, and response size is capped (`fetch.py`).
+- **Dead sites:** after `error_threshold` (5) timeouts or connection errors in a row (each
+  retry counts), the site gets no more requests this run, so one site that never answers
+  can't hold up the whole run (each try waits up to `timeout_seconds`, 25 s). There's no
+  cooldown: the next run tries it again, and its articles are retried then.
 
 ## Blocks: never get the IP banned
 

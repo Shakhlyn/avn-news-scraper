@@ -14,7 +14,7 @@ http:
   user_agent: "Mozilla/5.0 (compatible; AVNNewsScraper/0.1; human-rights news monitoring)"
   robots_agent: AVNNewsScraper
   timeout_seconds: 25
-  concurrency: 12          # total parallel requests
+  concurrency: 32          # total parallel requests
   per_host_delay: 1.0      # seconds between requests to the same site
   per_host_jitter: 0.5     # plus a random 0-50% of that, so requests have no fixed rhythm
   retries: 2
@@ -28,6 +28,9 @@ http:
   block_threshold: 3
   block_cooldown_hours: 12
   max_retry_after: 120
+  # After error_threshold timeouts / connection errors in a row (each retry counts) the site
+  # gets no more requests this run. No cooldown: the next run tries it again.
+  error_threshold: 5
   # Outlets with `fetch: impersonate` (sources.yaml) are fetched with a Chrome TLS
   # fingerprint (curl_cffi), at least impersonate_delay seconds apart.
   impersonate: chrome

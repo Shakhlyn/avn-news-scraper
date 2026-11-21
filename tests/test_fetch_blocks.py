@@ -336,6 +336,48 @@ def test_block_log_records_network_errors(tmp_path, monkeypatch):
     assert len(req) == 1 and req[0]["outcome"] == "error" and req[0]["error"].startswith("ConnectTimeout")
 
 
+def test_dead_host_stopped_after_repeated_timeouts_without_cooldown(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    from avn_scraper.scraper.blocklog import BlockLog
+    blog = BlockLog.for_run(tmp_path, "20261118T030000Z", "run")
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.host)
+        if request.url.host == "93.184.216.34":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(200, content=b"<html>ok</html>")
+
+    async def go(f):
+        dead = [await f.get(f"https://93.184.216.34/{i}") for i in range(10)]
+        return dead, await f.get("https://1.1.1.1/other"), f
+    dead, other, f = _run(go, handler, settings={"retries": 1, "error_threshold": 5},
+                          cooldown_path=tmp_path / "blocks.json", block_log=blog)
+    assert dead == [None] * 10 and other is not None
+    assert calls.count("93.184.216.34") == 5  # 2 pages x 2 tries, then 1 try of the 3rd page
+    assert f.failures["https://93.184.216.34/9"] == "host_blocked"
+    assert "ReadTimeout" in f.stopped_hosts()["93.184.216.34"]
+    assert not (tmp_path / "blocks.json").exists() or "93.184.216.34" not in (tmp_path / "blocks.json").read_text()
+    stop = next(e for e in _events(blog.path) if e["event"] == "host_stopped")
+    assert stop["host"] == "93.184.216.34" and stop["until"] is None
+
+
+def test_an_answer_resets_the_network_error_count(monkeypatch):
+    _no_sleep(monkeypatch)
+    answers = iter(["timeout"] * 4 + ["ok"] + ["timeout"] * 4 + ["ok"])
+
+    def handler(request):
+        if next(answers) == "timeout":
+            raise httpx.ConnectTimeout("timed out", request=request)
+        return httpx.Response(200, content=b"<html>ok</html>")
+
+    async def go(f):
+        return [await f.get(f"https://93.184.216.34/{i}") for i in range(10)], f.stopped_hosts()
+    out, stopped = _run(go, handler, settings={"error_threshold": 5})
+    assert out[4] is not None and out[9] is not None
+    assert stopped == {}
+
+
 def test_block_report_reads_the_logs(tmp_path, monkeypatch):
     _no_sleep(monkeypatch)
     import shutil

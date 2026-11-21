@@ -178,6 +178,7 @@ class Fetcher:
         self.max_bytes = int(float(s.get("max_response_mb", 20)) * 1024 * 1024)
         self.timeout = float(s.get("timeout_seconds", 25))
         self.block_threshold = int(s.get("block_threshold", 3))
+        self.error_threshold = int(s.get("error_threshold", 5))
         self.cooldown_hours = float(s.get("block_cooldown_hours", 12))
         self.max_retry_after = float(s.get("max_retry_after", 120))
         self.impersonate = str(s.get("impersonate", "chrome"))
@@ -206,6 +207,7 @@ class Fetcher:
         self._robots: dict[str, RobotFileParser | None] = {}
         self._robots_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._strikes: Counter[str] = Counter()  # block answers in a row, per host
+        self._errors_in_row: Counter[str] = Counter()  # timeouts / connection errors in a row, per host
         self._stopped: dict[str, str] = {}  # host -> why it is not asked again this run
         self.cooldowns = HostCooldowns(cooldown_path)
         self.stats: Counter[str] = Counter()
@@ -393,6 +395,21 @@ class Fetcher:
                 self.block_log.skip(host, stopped)
         return bool(stopped)
 
+    def _stop_unreachable(self, host: str, error: str, url: str) -> None:
+        """Stop a site that keeps timing out, for this run only.
+
+        Each failure costs up to timeout_seconds and a site gets one request at a time, so a dead
+        site would otherwise hold the run up for hours. It is not refusing us, so no cooldown:
+        the next run tries it again.
+        """
+        if host in self._stopped:
+            return
+        reason = f"{self._errors_in_row[host]} network errors in a row, last: {error.split(':')[0]} on {url}"
+        self._stopped[host] = reason
+        if self.block_log:
+            self.block_log.host_stopped(host, reason, None, self._errors_in_row[host])
+        log.warning("%s is not answering (%s): no more requests to it this run", host, reason)
+
     async def _stop_host(self, host: str, reason: str) -> None:
         if host in self._stopped:
             return
@@ -452,6 +469,13 @@ class Fetcher:
                                         sent, queued, previous)
             if unsafe:
                 return None
+            if resp is None:
+                self._errors_in_row[host] += 1
+                if self._errors_in_row[host] >= self.error_threshold:
+                    self._stop_unreachable(host, error or "error", url)
+                    return None
+            else:
+                self._errors_in_row[host] = 0
             if kind:
                 await self._note_block(host, kind, url)
                 if host in self._stopped:
