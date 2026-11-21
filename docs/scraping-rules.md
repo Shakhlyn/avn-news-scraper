@@ -84,7 +84,13 @@ The very first run has no memory yet, so tabs without dates are read to the page
   only if it qualifies for a category. A strong term is required, and weak terms only add
   score.
 - **Date check**: an article published before the 24-hour window is dropped, even if a
-  link to it was found.
+  link to it was found. The publication date is read from the page in this order: JSON-LD
+  `datePublished` (of the article, not the web page), publication meta tags
+  (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, a `<time>` in the
+  article or header, then any `<time>` on the page. Modified/updated dates are never used, so
+  an old story edited today does not pass. A full timestamp beats a bare day. When the
+  only date is a bare day (no time), it is compared by day in Dhaka: a story dated with
+  yesterday's day is kept, not dropped as "before 07:00".
 - **Blocked pages** (403, 404, robots.txt) are judged on the headline and summary we already
   have. If they match, they are saved with `body_missing = 1`, and they are not retried.
   **Temporary failures** (timeouts, 5xx) are retried on the next run.

@@ -196,3 +196,84 @@ def test_find_next_page():
     assert find_next_page(page("/national/page/2/"), base + "/") == base + "/page/2/"
     assert find_next_page(page("/national/page/2/", "/national/page/3/"), base + "/page/2/") == base + "/page/3/"
     assert find_next_page(page("/sports?page=2", "/national/1234"), base) is None
+
+
+_BODY = "<p>" + "পুলিশ হেফাজতে এক যুবকের মৃত্যু হয়েছে বলে অভিযোগ করেছে পরিবার। " * 8 + "</p>"
+
+
+def test_extract_json_ld_date_beats_sidebar_time():
+    html = f"""<html><head><script type="application/ld+json">
+    {{"@context": "https://schema.org", "@graph": [{{"@type": "WebSite", "name": "x"}},
+      {{"@type": "NewsArticle", "datePublished": "2026-11-20T10:30:00+06:00"}}]}}
+    </script></head><body><aside><time datetime="2026-11-01T01:00:00Z">পুরনো</time></aside>
+    <article><h1>হেফাজতে যুবকের মৃত্যু</h1>{_BODY}</article></body></html>"""
+    ex = extract(html, "https://example.com/n/3")
+    assert ex.published_at == datetime(2026, 11, 20, 4, 30, tzinfo=timezone.utc)
+    assert not ex.date_only
+
+
+def test_extract_rfc2822_and_itemprop_dates_keep_the_time():
+    rfc = f"""<html><head><meta property="article:published_time" content="Fri, 20 Nov 2026 10:30:00 +0600">
+    </head><body><article><h1>শিরোনাম এখানে</h1>{_BODY}</article></body></html>"""
+    item = f"""<html><body><article><h1>শিরোনাম এখানে</h1>
+    <span itemprop="datePublished" content="২০২৬-১১-২০T১০:৩০:০০+০৬:০০">২০ নভেম্বর</span>{_BODY}</article></body></html>"""
+    for html in (rfc, item):
+        ex = extract(html, "https://example.com/n/4")
+        assert ex.published_at == datetime(2026, 11, 20, 4, 30, tzinfo=timezone.utc)
+
+
+def test_extract_ignores_modified_date_and_flags_bare_day():
+    html = f"""<html><head><meta property="article:modified_time" content="2026-11-20T10:30:00+06:00">
+    <meta name="pubdate" content="2026-11-19"></head><body><article><h1>শিরোনাম এখানে</h1>{_BODY}</article></body></html>"""
+    ex = extract(html, "https://example.com/n/5")
+    assert ex.published_at.date().isoformat() == "2026-11-19"
+    assert ex.date_only
+
+
+def test_extract_title_drops_outlet_name():
+    head = '<meta property="og:site_name" content="প্রথম আলো">'
+    # the page headline (<h1>) matches the longer side of the title
+    html = f"""<html><head><title>হেফাজতে যুবকের মৃত্যু | প্রথম আলো</title>{head}</head>
+    <body><h1>প্রথম আলো</h1><article><h1>হেফাজতে যুবকের মৃত্যু</h1>{_BODY}</article></body></html>"""
+    assert extract(html, "https://example.com/n/6").title == "হেফাজতে যুবকের মৃত্যু"
+    # no usable <h1>: the og:site_name part is dropped
+    html = f"""<html><head><title>প্রথম আলো - হেফাজতে যুবকের মৃত্যু</title>{head}</head>
+    <body><article>{_BODY}</article></body></html>"""
+    assert extract(html, "https://example.com/n/7").title == "হেফাজতে যুবকের মৃত্যু"
+
+
+def test_extract_prefers_longer_itemprop_body():
+    long_text = "<p>সীমান্তে বিএসএফের গুলিতে যুবক নিহত হয়েছেন।</p>" * 40
+    html = f"""<html><body><h1>শিরোনাম এখানে</h1><p>সংক্ষিপ্ত অংশ মাত্র।</p>
+    <div itemprop="articleBody">{long_text}</div></body></html>"""
+    assert extract(html, "https://example.com/n/9").body.count("নিহত") >= 40
+
+
+def test_judge_compares_bare_day_by_day():
+    import asyncio
+    from zoneinfo import ZoneInfo
+
+    from avn_scraper.scraper.discover import Candidate
+    from avn_scraper.scraper.extract import Extracted
+    from avn_scraper.scraper.pipeline import Judge
+
+    class NoMatch:
+        def classify(self, *_):
+            return []
+
+    tz = ZoneInfo("Asia/Dhaka")
+    judge = Judge(classifier=NoMatch(), storage=None, tz=tz, run_id="r", by_id={}, recent=[],
+                  window_from=datetime(2026, 11, 20, 7, 0, tzinfo=tz),
+                  scraped_at=datetime(2026, 11, 21, 1, 0, tzinfo=timezone.utc))
+
+    def outcome(day: datetime, feed: datetime | None = None) -> str:
+        c = Candidate(url="https://example.com/n/10", source_id="x", title="t", published_at=feed)
+        ex = Extracted("t", "body", "", "", day, None, None, date_only=True)
+        return asyncio.run(judge.article(c, "<html>", ex, "")).outcome
+
+    # yesterday as a bare day is midnight, before 07:00, but the day is in the window
+    assert outcome(datetime(2026, 11, 20, tzinfo=timezone.utc)) == "no_match"
+    assert outcome(datetime(2026, 11, 19, tzinfo=timezone.utc)) == "too_old"
+    # a full timestamp from the feed wins over the bare day
+    assert outcome(datetime(2026, 11, 20, tzinfo=timezone.utc),
+                   feed=datetime(2026, 11, 20, 0, 30, tzinfo=timezone.utc)) == "too_old"

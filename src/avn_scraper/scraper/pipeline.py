@@ -184,13 +184,25 @@ class Judge:
         if not fetch_ok and (not c.title or not (permanent or c.summary)):
             return Verdict("fetch_failed", seen=[(cid, c.url, reason)] if permanent else [], failed=failed)
         ex = ex or Extracted(c.title, "", c.summary, "", None, None, None)
-        published = ex.published_at or c.published_at
-        if published and published > self.scraped_at + timedelta(minutes=15):
-            # Some sites label Dhaka wall-clock time as UTC; read it as local time.
-            published = published.replace(tzinfo=self.tz)
+        date_only = ex.date_only and ex.published_at is not None
+        if date_only and c.published_at:  # the feed's full timestamp beats a bare day
+            date_only = False
+            published = c.published_at
+        else:
+            published = ex.published_at or c.published_at
+        if date_only:
+            # A bare day: the story is in the window when its day (in Dhaka) is not before
+            # the window's first day. Midnight would drop yesterday's afternoon stories.
+            published = datetime.combine(published.date(), datetime.min.time(), self.tz)
+            too_old = published.date() < self.window_from.astimezone(self.tz).date()
+        else:
+            if published and published > self.scraped_at + timedelta(minutes=15):
+                # Some sites label Dhaka wall-clock time as UTC; read it as local time.
+                published = published.replace(tzinfo=self.tz)
+            too_old = bool(published and published < self.window_from)
         if published:
             published = published.astimezone(timezone.utc)
-        if published and published < self.window_from:
+        if too_old:
             return Verdict("too_old", seen=[(cid, c.url, "old")] if self.mark_old else [], failed=failed)
         if published and self.window_to and published >= self.window_to:
             return Verdict("too_new", failed=failed)
