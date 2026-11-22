@@ -36,41 +36,69 @@ from .urls import article_id, host_of, same_site, slug_text
 log = logging.getLogger(__name__)
 
 
+class RunTooLong(Exception):
+    """The run went past max_run_minutes, a last safety net against a hang."""
+
+
+def outlet_group(source: Source | None) -> str:
+    """'regional' for local/district papers, 'national' for the rest (national, online, TV, agency)."""
+    return "regional" if source is not None and source.type == "regional" else "national"
+
+
 class Progress:
-    """Logs a progress line every `every` seconds while a run works.
+    """Logs a progress line every `every` seconds while a run works, national and regional apart.
 
     A run spends most of its time waiting between paced requests (near 0% CPU), and the block
     log only records failures, so without this a slow run looks the same as a stuck one.
     """
 
-    def __init__(self, fetcher: Fetcher, every: float):
+    GROUPS = ("national", "regional")
+
+    def __init__(self, fetcher: Fetcher, every: float, by_id: dict[str, Source] | None = None):
         self.fetcher = fetcher
         self.every = every
+        self.by_id = by_id or {}
         self.started = time.monotonic()
         self.phase = "starting"
-        self.done = 0
-        self.total = 0
+        self.done: Counter[str] = Counter()
+        self.total: Counter[str] = Counter()
         self._task: asyncio.Task | None = None
 
-    def start_phase(self, phase: str, total: int) -> None:
-        self.phase, self.done, self.total = phase, 0, total
+    def group(self, source_id: str | None) -> str:
+        return outlet_group(self.by_id.get(source_id or ""))
 
-    async def counted(self, coro):
+    def start_phase(self, phase: str, source_ids: list[str | None]) -> None:
+        """Begin counting `phase`, one item per entry of source_ids (an outlet or an article's outlet)."""
+        self.phase = phase
+        self.done = Counter()
+        self.total = Counter(self.group(sid) for sid in source_ids)
+
+    async def counted(self, coro, source_id: str | None):
         """Await coro and count it as one finished item of the current phase."""
         try:
             return await coro
         finally:
-            self.done += 1
+            self.done[self.group(source_id)] += 1
+
+    def _requests(self) -> Counter[str]:
+        f = self.fetcher
+        out: Counter[str] = Counter()
+        for host, n in f.requests_by_host().items():
+            out[self.group(f.source_for(host.split(":")[0]))] += n
+        return out
 
     def line(self) -> str:
         elapsed = int(time.monotonic() - self.started)
         f = self.fetcher
-        parts = [f"{self.phase} {self.done}/{self.total}", f"{f.requests_sent:,} requests"]
+        requests = self._requests()
+        groups = [f"{g} {self.done[g]}/{self.total[g]} ({requests[g]:,} requests)"
+                  for g in self.GROUPS if self.total[g] or requests[g]]
+        parts = [f"{self.phase}: " + ", ".join(groups or ["nothing yet"])]
         if f.requests_failed:
             parts.append(f"{f.requests_failed:,} failed")
         if f.stopped_hosts():
             parts.append(f"{len(f.stopped_hosts())} sites stopped")
-        return f"progress: {', '.join(parts)}, {elapsed // 60}m{elapsed % 60:02d}s"
+        return f"progress: {'; '.join(parts)}; {elapsed // 60}m{elapsed % 60:02d}s"
 
     async def _loop(self) -> None:
         while True:
@@ -335,8 +363,17 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
                        transport: httpx.AsyncBaseTransport | None = None) -> RunResult:
     """Fails before any web request if the database cannot be used."""
     storage = await PostgresStorage.open(cfg.data_dir)
+    limit = float(cfg.settings.get("max_run_minutes") or 0)
+    deadline = asyncio.timeout(limit * 60 if limit > 0 else None)
     try:
-        return await _run(cfg, opts, storage, transport)
+        async with deadline:
+            return await _run(cfg, opts, storage, transport)
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        # Articles saved so far stay. No run record is written, so the next
+        # --since-last-run run looks back to the last run that finished.
+        raise RunTooLong(f"the scrape ran past max_run_minutes ({limit:g} min) and was stopped") from None
     finally:
         await storage.close()
 
@@ -373,11 +410,11 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     stats["block_log"] = str(block_log.path)
     async with Fetcher(s.get("http") or {}, transport=transport, sources=cfg.sources,
                        cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher, \
-            Progress(fetcher, float(s.get("progress_seconds", 60))) as progress:
+            Progress(fetcher, float(s.get("progress_seconds", 60)), by_id) as progress:
         # 1. discover
-        progress.start_phase("outlets scanned", len(sources))
+        progress.start_phase("outlets scanned", [src.id for src in sources])
         results = await asyncio.gather(*(progress.counted(
-            discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)) for src in sources))
+            discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory), src.id) for src in sources))
         await asyncio.to_thread(cache.save)
         stats["sources"] = {r.source_id: {"ok": r.ok, "counts": r.counts, "endpoints": r.endpoints, "error": r.error}
                             for r in results}
@@ -408,8 +445,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         log.info("%d candidates, %d new, %d selected for download", len(merged), stats["new_candidates"], len(selected))
 
         # 3. fetch & extract
-        progress.start_phase("articles downloaded", len(selected))
-        fetched = await asyncio.gather(*(progress.counted(_fetch_one(fetcher, c)) for c in selected))
+        progress.start_phase("articles downloaded", [c.source_id for c in selected])
+        fetched = await asyncio.gather(*(progress.counted(_fetch_one(fetcher, c), c.source_id) for c in selected))
         stats["http"] = dict(fetcher.stats)
         log.info("%s", progress.line().replace("progress:", "download done:"))
         if fetcher.stopped_hosts():

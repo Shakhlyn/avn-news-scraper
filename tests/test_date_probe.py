@@ -104,3 +104,39 @@ def test_pipeline_reuses_a_probed_page():
             return await _fetch_one(f, c)
 
     assert asyncio.run(go()) == (c, "<html>", "EX")
+
+
+def _budget_run(kind: str, budget_minutes: float):
+    """discover_source on an outlet with one two-page tab; returns (pages read, counts)."""
+    from avn_scraper.scraper.discover.sources import discover_source
+
+    pages = {"/": HOME, "/local": _listing([1, 2, 3], "/local?page=2"), "/local?page=2": _listing([4, 5], None)}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        html = pages.get(request.url.raw_path.decode(), "")
+        return httpx.Response(200, stream=_Stream(html.encode()), headers={"Content-Type": "text/html"})
+
+    source = Source(id="local", name="Local", language="bn", type=kind, homepage=SITE + "/",
+                    feeds=[SITE + "/feed"])
+    cache = type("Cache", (), {"get": lambda self, k: None, "set": lambda self, *a: None})()
+
+    async def go():
+        async with Fetcher({"respect_robots": False, "per_host_delay": 0, "retries": 0},
+                           transport=httpx.MockTransport(handler)) as f:
+            return await discover_source(f, source, NOW - timedelta(hours=24), cache,
+                                         {"regional_budget_minutes": budget_minutes, "date_probe": 0})
+    r = asyncio.run(go())
+    return r.counts["section_pages"], r.counts
+
+
+def test_regional_budget_stops_tab_paging_and_keeps_what_was_found():
+    pages_read, counts = _budget_run("regional", -1)  # negative: no budget
+    assert pages_read == 2 and "section_budget_hit" not in counts
+    pages_read, counts = _budget_run("regional", 1e-9)  # used up at once
+    assert pages_read == 0 and counts["section_budget_hit"] == 1
+    assert counts["listing"] > 0 and "rss" in counts  # homepage and feeds still read
+
+
+def test_national_papers_have_no_budget():
+    pages_read, counts = _budget_run("national", 1e-9)
+    assert pages_read == 2 and "section_budget_hit" not in counts

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
@@ -251,14 +252,16 @@ async def probe_past_window(fetcher: Fetcher, items: list[Candidate], cutoff: da
 
 
 async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str, cutoff: datetime,
-                            settings: dict | None, memory: ListingMemory | None
-                            ) -> tuple[list[Candidate], list[str], int]:
+                            settings: dict | None, memory: ListingMemory | None,
+                            deadline: float | None = None) -> tuple[list[Candidate], list[str], int]:
     """Scan the print edition and every top-level tab, following each one's pages.
 
     Returns (candidates, sections, pages scanned). Paging stops when most of a page's dated
     items are older than cutoff, when at least half its links were seen on an earlier run
     (the previous daily run), when a page brings nothing new, or at max_pages (a safety cap).
     A regional outlet's page without dates is judged by downloading its last few articles.
+    Past `deadline` (time.monotonic(), the outlet's time budget) no new page is read; what was
+    found is kept.
     """
     settings = settings or {}
     limit = int(settings.get("max_per_source", 60))
@@ -286,6 +289,10 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
         visited: set[str] = set()
         url: str | None = section
         while url and canonicalize(url) not in visited and len(visited) < max_pages:
+            if deadline is not None and time.monotonic() > deadline:
+                log.warning("%s: tab paging stopped after its time budget, %d pages read; "
+                            "keeping what was found", source.id, pages)
+                return out, sections, pages
             visited.add(canonicalize(url))
             items, html = await discover_listing(fetcher, url, source.homepage, source.id)
             pages += 1

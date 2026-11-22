@@ -110,11 +110,18 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, ca
                           sections_settings: dict | None = None,
                           memory: ListingMemory | None = None) -> SourceResult:
     result = SourceResult(source.id)
+    started = time.monotonic()
+    # Only regional papers get a time budget: some have dozens of undated tabs that would take
+    # hours to page through. National papers always finish, short of errors or blocks.
+    budget = float((sections_settings or {}).get("regional_budget_minutes") or 0) if source.type == "regional" else 0
+    deadline = time.monotonic() + budget * 60 if budget > 0 else None
     try:
         items, homepage_html = await discover_listing(fetcher, source.homepage, source.homepage, source.id)
         result.add("listing", items)
         items, sections, pages = await discover_sections(fetcher, source, homepage_html, cutoff,
-                                                         sections_settings, memory)
+                                                         sections_settings, memory, deadline)
+        if deadline is not None and time.monotonic() > deadline:
+            result.counts["section_budget_hit"] = 1
         result.add("section", items)
         result.counts["section_pages"] = pages
 
@@ -140,4 +147,5 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, ca
     except Exception as exc:  # one broken site must not stop the run
         log.warning("discovery failed for %s: %r", source.id, exc)
         result.error = repr(exc)
+    result.counts["seconds"] = round(time.monotonic() - started)
     return result

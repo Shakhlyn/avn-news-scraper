@@ -319,6 +319,10 @@ class Fetcher:
         """Requests sent this run, retries included."""
         return sum(self._host_seq.values())
 
+    def requests_by_host(self) -> dict[str, int]:
+        """Requests sent this run per host (netloc), retries included."""
+        return dict(self._host_seq)
+
     @property
     def requests_failed(self) -> int:
         """Attempts that got no answer (timeouts, connection errors) this run."""

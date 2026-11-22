@@ -1,6 +1,9 @@
 # Sourced by scrape-now.sh and serve.sh: make sure the database is up. Docker may
-# still be starting after a boot, so it gets two minutes.
+# still be starting after a boot, so it gets two minutes. Each docker call gets a time
+# limit too, so a stuck Docker daemon fails here instead of hanging the script.
 CONTAINER=avn-postgres
+DOCKER_BIN=$(command -v docker || echo docker)
+docker() { timeout 20 "$DOCKER_BIN" "$@"; }
 
 for _ in $(seq 120); do
   docker info >/dev/null 2>&1 && break

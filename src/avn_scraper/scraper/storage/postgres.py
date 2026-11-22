@@ -61,11 +61,20 @@ def database_url() -> str:
     return url
 
 
+# Longest one query may run (waiting on a lock included) before Postgres cancels it, so a
+# stuck lock fails the run with an error instead of hanging it. Exports are the slowest
+# queries and take seconds.
+STATEMENT_TIMEOUT_MS = 10 * 60 * 1000
+
+
 async def connect(url: str | None = None, attempts: int = 3, delay: float = 2.0) -> psycopg.AsyncConnection:
     url = url or database_url()
     for attempt in range(1, attempts + 1):
         try:
-            return await psycopg.AsyncConnection.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=5)
+            conn = await psycopg.AsyncConnection.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=5)
+            # SET, not the `options` connect argument, which would replace options in DATABASE_URL.
+            await conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+            return conn
         except psycopg.OperationalError as exc:
             if attempt == attempts:
                 raise DatabaseUnavailable(

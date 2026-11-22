@@ -9,9 +9,15 @@ from psycopg_pool import AsyncConnectionPool
 
 
 def make_pool(url: str, max_size: int) -> AsyncConnectionPool:
-    """Opened by the app's lifespan. Queries wait 5 seconds at most for a connection."""
+    """Opened by the app's lifespan. Queries wait 5 seconds at most for a connection, and
+    Postgres cancels one that runs over 30 seconds (a stuck lock), so a request can't hang."""
     return AsyncConnectionPool(url, min_size=1, max_size=max_size, open=False, timeout=5,
-                               kwargs={"autocommit": True, "row_factory": dict_row})
+                               kwargs={"autocommit": True, "row_factory": dict_row}, configure=_limit_queries)
+
+
+async def _limit_queries(conn: psycopg.AsyncConnection) -> None:
+    # SET, not the `options` connect argument, which would replace options in DATABASE_URL.
+    await conn.execute("SET statement_timeout = 30000")
 
 
 async def fetch_all(conn: psycopg.AsyncConnection, sql: Any, params: Any = None) -> list[dict[str, Any]]:

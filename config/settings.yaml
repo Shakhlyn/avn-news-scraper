@@ -48,6 +48,11 @@ http:
 # requests, so this is how to tell a slow run from a stuck one. 0 turns it off.
 progress_seconds: 60
 
+# Last safety net: a run still going after this many minutes is stopped. Articles saved so far
+# stay; no run record is written, so the next run looks back to the last finished one. A full
+# run takes about 40 min. Empty or 0 = no limit.
+max_run_minutes: 180
+
 # Every new article in the window is downloaded and judged on its full text, so a story
 # with a plain headline (or deep in a tab or the print edition) is not missed.
 # prefilter: true downloads only links whose headline, summary or URL has a keyword (faster,
@@ -68,6 +73,12 @@ sections:
   auto_discover: true
   max_per_source: 60   # safety cap on tabs per outlet
   max_pages: 20        # safety cap on pages per tab
+  # Time budget per regional (local/district) paper for reading its tabs' pages, in minutes.
+  # Past it no new tab page is read and what was found is kept; its feeds, sitemaps and article
+  # downloads still run. Some regional papers have dozens of undated tabs, which the caps above
+  # would let run for hours. National papers (also online, TV, agency) have no budget: they
+  # finish all their work unless errors or blocks stop them. Empty or 0 = no budget.
+  regional_budget_minutes: 5
   date_probe: 3        # regional outlets: a tab page without dates is judged by its last 3 articles (0 = off)
 
 # Backfill of past months (`avn backfill 2025-05`). Old articles come from the outlets'

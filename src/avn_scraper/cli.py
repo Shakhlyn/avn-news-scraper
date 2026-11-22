@@ -26,7 +26,7 @@ from .scraper.export import export_all
 from .scraper.blocklog import BlockLog, read_events, sync_to_db
 from .scraper.fetch import Fetcher
 from .scraper.lock import RunInProgress, run_lock
-from .scraper.pipeline import RunOptions, reclassify, run_pipeline
+from .scraper.pipeline import RunOptions, RunTooLong, reclassify, run_pipeline
 from .scraper.importer import import_sqlite
 from .scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate as apply_migrations
 
@@ -85,6 +85,14 @@ def run(
         raise typer.Exit(1)
     except DatabaseUnavailable as exc:
         console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    except RunTooLong as exc:
+        console.print(f"[red]Stopped: {exc}. Articles saved so far are kept; the next run looks back "
+                      "to the last finished one.[/]")
+        raise typer.Exit(1)
+    except psycopg.errors.QueryCanceled as exc:
+        console.print(f"[red]A database query ran past its time limit and was stopped ({exc}). "
+                      "Check for a stuck lock, then run again.[/]")
         raise typer.Exit(1)
     except psycopg.OperationalError as exc:
         console.print(f"[red]Lost the database during the run ({exc}). Run again once it is back.[/]")

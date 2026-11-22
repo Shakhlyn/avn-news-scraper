@@ -202,20 +202,26 @@ def test_progress_line_and_periodic_log(caplog):
     from types import SimpleNamespace
     from avn_scraper.scraper.pipeline import Progress
 
-    fetcher = SimpleNamespace(requests_sent=8400, requests_failed=12,
-                              stopped_hosts=lambda: {"a.com": "x", "b.com": "y"})
+    by_id = {"star": SimpleNamespace(type="national"), "tv": SimpleNamespace(type="tv"),
+             "local": SimpleNamespace(type="regional")}
+    hosts = {"star.com": "star", "tv.com": "tv", "local.com": "local"}
+    fetcher = SimpleNamespace(requests_failed=12, stopped_hosts=lambda: {"a.com": "x"},
+                              requests_by_host=lambda: {"star.com": 100, "tv.com": 20, "local.com:443": 900},
+                              source_for=hosts.get)
 
     async def go():
-        async with Progress(fetcher, every=0.02) as p:
-            p.start_phase("outlets scanned", 3)
-            await p.counted(asyncio.sleep(0))
+        async with Progress(fetcher, every=0.02, by_id=by_id) as p:
+            p.start_phase("outlets scanned", ["star", "tv", "local", "local"])
+            await p.counted(asyncio.sleep(0), "star")
+            await p.counted(asyncio.sleep(0), "local")
             await asyncio.sleep(0.07)
             return p.line()
 
     with caplog.at_level(logging.INFO, logger="avn_scraper.scraper.pipeline"):
         line = asyncio.run(go())
-    assert line.startswith("progress: outlets scanned 1/3, 8,400 requests, 12 failed, 2 sites stopped, 0m0")
-    assert sum("progress: outlets scanned 1/3" in r.message for r in caplog.records) >= 2
+    assert line.startswith("progress: outlets scanned: national 1/2 (120 requests), "
+                           "regional 1/2 (900 requests); 12 failed; 1 sites stopped; 0m0")
+    assert sum("national 1/2" in r.message for r in caplog.records) >= 2
 
 
 def test_progress_off_when_zero():
@@ -226,3 +232,45 @@ def test_progress_off_when_zero():
         async with Progress(SimpleNamespace(), every=0) as p:
             return p._task
     assert asyncio.run(go()) is None
+
+
+def test_run_past_max_run_minutes_is_stopped(monkeypatch, cfg):
+    from avn_scraper.scraper import pipeline
+
+    class Storage:
+        closed = False
+
+        async def close(self):
+            Storage.closed = True
+
+    async def fake_open(data_dir):
+        return Storage()
+
+    async def slow_run(*args):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(pipeline.PostgresStorage, "open", fake_open)
+    monkeypatch.setattr(pipeline, "_run", slow_run)
+    config = Config(**{**cfg.__dict__, "settings": {**cfg.settings, "max_run_minutes": 0.001}})
+    with pytest.raises(pipeline.RunTooLong):
+        asyncio.run(run_pipeline(config, RunOptions()))
+    assert Storage.closed
+
+
+def test_timeout_inside_a_run_is_not_reported_as_too_long(monkeypatch, cfg):
+    from avn_scraper.scraper import pipeline
+
+    class Storage:
+        async def close(self):
+            pass
+
+    async def fake_open(data_dir):
+        return Storage()
+
+    async def failing_run(*args):
+        raise TimeoutError("something else")
+
+    monkeypatch.setattr(pipeline.PostgresStorage, "open", fake_open)
+    monkeypatch.setattr(pipeline, "_run", failing_run)
+    with pytest.raises(TimeoutError, match="something else"):
+        asyncio.run(run_pipeline(cfg, RunOptions()))

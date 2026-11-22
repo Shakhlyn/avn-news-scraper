@@ -147,9 +147,16 @@ A banned IP also stops every later test, so the scraper backs off before a site 
   apply, and `robots.txt` is still read as `AVNNewsScraper`.
 - Outlets whose blocks a fingerprint doesn't fix are `enabled: false`, with the reason as
   a comment in `sources.yaml`.
+- **Time limits, so nothing hangs:** each request `request_deadline_seconds` (180 s); each
+  **regional** paper's tab paging `sections.regional_budget_minutes` (5 min; then no new tab
+  page, what was found is kept and its feeds, sitemaps and articles are still read). National
+  papers (and online, TV, agency) have no budget and always finish, short of errors or blocks; the whole run
+  `max_run_minutes` (180 min; then it stops, saved articles stay, no run record, so the next run
+  looks back further). Postgres cancels a scrape query after 10 min and an API query after
+  30 s (a stuck lock fails with an error instead of hanging).
 - **Progress:** a run (and the service's daily scrape) logs a line every `progress_seconds`
-  (60 s): outlets scanned or articles downloaded so far out of the total, requests sent, failed
-  attempts, sites stopped, and time taken. A full run takes about 40 min at near 0% CPU, and
+  (60 s), national and regional apart: outlets scanned or articles downloaded so far out of
+  the total and requests sent, then failed attempts, sites stopped, and time taken. A full run takes about 40 min at near 0% CPU, and
   the block log only records failures, so this line is how to tell slow from stuck.
 - **Block log (permanent):** successful requests are only counted. Each scrape (run,
   dry run, `check-sources`) writes, in a folder named after the scrape's day in Asia/Dhaka:

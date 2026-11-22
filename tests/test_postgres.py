@@ -115,9 +115,25 @@ def test_database_down_fails_before_any_web_request(tmp_path, monkeypatch):
         asyncio.run(run_pipeline(config, RunOptions(), transport=None))
 
 
+async def _test_schema(conn) -> str:
+    """The connection's schema; refuses anything but a throwaway test schema."""
+    schema = (await (await conn.execute("SELECT current_schema() AS s")).fetchone())["s"]
+    assert schema and schema.startswith("test_"), f"not a test schema: {schema!r}; refusing to touch it"
+    return schema
+
+
+async def test_connect_keeps_the_url_search_path(database):
+    # The URL's options carry the test schema; connect() must not replace them (2026-11-22 a
+    # statement_timeout passed as `options` did, and the tests ran against the real tables).
+    conn = await connect(database)
+    await _test_schema(conn)
+    assert (await (await conn.execute("SHOW statement_timeout")).fetchone())["statement_timeout"] == "10min"
+
+
 async def test_missing_tables_say_to_migrate(tmp_path, database):
     conn = await connect(database)
-    await conn.execute("DROP TABLE articles CASCADE")
+    schema = await _test_schema(conn)
+    await conn.execute(f"DROP TABLE {schema}.articles CASCADE")
     with pytest.raises(DatabaseUnavailable, match="avn migrate"):
         await PostgresStorage.open(tmp_path, conn)
 
