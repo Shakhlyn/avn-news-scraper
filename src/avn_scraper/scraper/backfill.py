@@ -34,7 +34,8 @@ from .fetch import Fetcher
 from .lock import is_locked
 from .pipeline import _PERMANENT_FAILURES, Judge, _fetch_one, _save, _write_run_log
 from .storage import PostgresStorage, Storage
-from .urls import article_id, host_of, slug_text
+from .geo import about_bangladesh
+from .urls import article_id, host_of, international_section, off_topic_section, slug_text
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +98,10 @@ def _select(candidates: dict[str, Candidate], known: set[str], classifier: Class
     for key, c in candidates.items():
         if key in known:
             per[c.source_id]["known"] += 1
+        elif off_topic_section(c.url):  # sports, entertainment, business, ...
+            per[c.source_id]["off_topic"] += 1
+        elif international_section(c.url) and not about_bangladesh(f"{c.title} {c.summary} {slug_text(c.url)}"):
+            per[c.source_id]["foreign"] += 1  # world news not about Bangladesh
         elif not headline_text(c):
             per[c.source_id]["untitled"] += 1
             if _MEDIA.search(urlsplit(c.url).path):

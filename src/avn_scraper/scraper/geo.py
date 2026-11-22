@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 from .classify import compile_term
@@ -84,6 +85,15 @@ DISTRICTS: dict[str, list[str]] = {
 }
 
 _PATTERNS = {name: [compile_term(s).pattern for s in spellings] for name, spellings in DISTRICTS.items()}
+
+
+_BANGLADESH = re.compile(r"বাংলাদেশ|প্রবাসী|প্রবাসে|bangladesh|expatriate", re.I)
+
+
+def about_bangladesh(text: str) -> bool:
+    """The text names Bangladesh, Bangladeshis / expatriates, or a Bangladeshi district."""
+    t = normalize(text)
+    return bool(_BANGLADESH.search(t)) or any(p.search(t) for patterns in _PATTERNS.values() for p in patterns)
 
 
 def detect_districts(title: str, body: str, *, body_chars: int = 2500) -> tuple[str | None, list[str]]:

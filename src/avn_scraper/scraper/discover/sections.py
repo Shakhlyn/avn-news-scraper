@@ -17,7 +17,7 @@ from ..adapters import find_adapter
 from ..config import Source
 from ..extract import extract
 from ..fetch import Fetcher
-from ..urls import article_id, canonicalize, host_of
+from ..urls import article_id, canonicalize, host_of, off_topic_segment
 from . import Candidate
 from .listing import discover_listing, parse_listing
 from .sitemap import parse_dt
@@ -114,7 +114,8 @@ def find_section_links(html: str, page_url: str, homepage: str, limit: int) -> l
     sub = {canonicalize(homepage)}
     for a, url, text in _links(html, page_url):
         path = _section_path(url, homepage)
-        if (path is None or _NOT_SECTION.search(path.lower()) or not 2 <= len(text) <= _MAX_TEXT_CHARS
+        if (path is None or _NOT_SECTION.search(path.lower()) or any(map(off_topic_segment, path.split("/")[1:]))
+                or not 2 <= len(text) <= _MAX_TEXT_CHARS
                 or len(text.split()) > _MAX_TEXT_WORDS):
             continue
         level = _menu_level(a, page_url, homepage)

@@ -49,7 +49,8 @@ A link is scanned as a tab when it:
 These are **never** scanned: tags, topics, videos, photos/galleries, logins/registration,
 search, archive, about/contact/privacy/terms, ads, subscriptions, RSS/sitemaps, authors,
 podcasts, live, polls, quizzes, horoscope, converters, apps, press releases, jobs.
-The full list is `_NOT_SECTION` in `src/avn_scraper/discover/sections.py`.
+The full list is `_NOT_SECTION` in `src/avn_scraper/discover/sections.py`. Sections that never
+carry our topics are not scanned either (see "Off-topic sections" below).
 
 On a homepage or tab page, links to tag, topic, category, author, video, photo, search and
 login pages (`/category/x`, `/category?catid=1`) and page-number links (`?page=2`,
@@ -88,6 +89,22 @@ The very first run has no memory yet, so tabs without dates are read to the page
 
 ## What gets downloaded and kept
 
+- **Off-topic sections are skipped**: sports, entertainment, lifestyle, technology,
+  business/economy, jobs, religion, horoscope, literature and similar (English and Bangla
+  section names, `OFF_TOPIC_SECTIONS` in `urls.py`). Their tabs are not scanned and their links
+  (`/sports/...`, `/বিনোদন/...`, `/islamic-life/...`) are not downloaded, in the daily run and the
+  backfill. Only the section part of the URL counts (`/national/sports-minister-...` is kept),
+  and `ict` is not skipped (International Crimes Tribunal). Of 1,337 saved articles, the 7 from
+  such sections were all false matches. A run counts them as `off_topic_skipped`.
+- **World news only when it is about Bangladesh**: links in world-news sections
+  (`international`, `world`, `foreign`, `inter-country`, regions like `asia`, `middle-east`;
+  `INTERNATIONAL_SECTIONS` in `urls.py`) are downloaded only when their headline, summary or URL
+  names Bangladesh, Bangladeshis, expatriates (`প্রবাসী`) or a Bangladeshi district. That keeps
+  Bangladeshis executed or sentenced abroad and Bangladesh at the UN, and drops foreign news
+  (62 of 87 saved world-news articles were foreign stories). `country`/`countries` (channel24's
+  whole-Bangladesh section) and `probash` are not world news. World tabs are still scanned.
+  A run counts the dropped links as `foreign_skipped`. The check sees only what the link
+  brings (headline, and a summary from RSS/listings), not the article text.
 - **Every article is read**: every new link in the window, from every page of every tab,
   the print edition, RSS and sitemaps, is downloaded once and judged on its full text, so a
   story with a plain headline or deep in the print edition is not missed. Links already

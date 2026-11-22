@@ -386,3 +386,56 @@ def test_listing_skips_category_and_page_number_links():
     </body></html>"""
     urls = [c.url for c in parse_listing(html, "https://ajkersylhet.com/", "https://ajkersylhet.com/", "s")]
     assert urls == ["https://ajkersylhet.com/news-details?nid=22629", "https://ajkersylhet.com/story?id=5&pageview=1"]
+
+
+def test_off_topic_sections_are_skipped_but_not_look_alikes():
+    from avn_scraper.scraper.urls import off_topic_section
+    skipped = ["https://samakal.com/entertainment/article/378623/x", "https://www.banglatribune.com/sport/cricket/975169/x",
+               "https://www.prothomalo.com/religion/islam/rngewo2qd1", "https://ekattor.tv/business/trade-business/97736/x",
+               "https://www.jugantor.com/islamic-life/123", "https://example.com/%E0%A6%96%E0%A7%87%E0%A6%B2%E0%A6%BE/9",  # /খেলা/
+               "https://www.ajkerpatrika.com/lifestyle/feature/ajpfwn1n7jer3"]
+    kept = ["https://www.prothomalo.com/bangladesh/district/abc",       # section words only in the slug
+            "https://example.com/national/sports-minister-on-border-killing",
+            "https://example.com/sports-minister-said-today",              # one segment: the article itself
+            "https://example.com/ict/verdict-12345",                      # International Crimes Tribunal
+            "https://example.com/law-and-crime/123", "https://example.com/international/99"]
+    assert all(off_topic_section(u) for u in skipped)
+    assert not any(off_topic_section(u) for u in kept)
+
+
+def test_off_topic_tabs_are_not_scanned():
+    from avn_scraper.scraper.discover.sections import find_section_links
+    html = """<html><body><nav class="menu"><ul>
+    <li><a href="/national">জাতীয়</a></li><li><a href="/sports">খেলা</a></li>
+    <li><a href="/entertainment">বিনোদন</a></li><li><a href="/country">সারাদেশ</a></li>
+    <li><a href="/economy">অর্থনীতি</a></li><li><a href="/ict">আইসিটি</a></li></ul></nav></body></html>"""
+    tabs = find_section_links(html, "https://example.com/", "https://example.com/", 60)
+    assert [t.rsplit("/", 1)[1] for t in tabs] == ["national", "country", "ict"]
+
+
+def test_world_news_kept_only_when_about_bangladesh():
+    from avn_scraper.scraper.geo import about_bangladesh
+    from avn_scraper.scraper.urls import international_section
+    assert international_section("https://www.banglatribune.com/foreign/middle-east/975553/x")
+    assert international_section("https://dailyinqilab.com/inter-country/article/956128")
+    assert international_section("https://www.prothomalo.com/world/asia/abc")
+    # whole-Bangladesh and expatriate sections are not world news
+    assert not international_section("https://www.channel24bd.tv/countries/article/359091/x")
+    assert not international_section("https://bangla.bdnews24.com/probash/vnaa4m69q5")
+    assert not international_section("https://example.com/world-cup-final-tonight")  # one segment: the slug
+    assert about_bangladesh("এবার কুয়েতে বাংলাদেশির মৃত্যুদণ্ড")
+    assert about_bangladesh("Bangladeshi man gets death sentence in Kuwait")
+    assert about_bangladesh("দুই প্রবাসীর মৃত্যুদণ্ডের কারণ জানতে সৌদি রাষ্ট্রদূতকে তলব")
+    assert about_bangladesh("টাঙ্গাইলে মাকে হত্যার দায়ে ছেলের মৃত্যুদণ্ড")
+    assert not about_bangladesh("জর্ডানে গির্জায় হামলায় তিনজনের মৃত্যুদণ্ড")
+    assert not about_bangladesh("Three men sentenced to death over Jordan church attack")
+
+
+def test_pipeline_drops_foreign_world_news_only():
+    from avn_scraper.scraper.discover import Candidate
+    from avn_scraper.scraper.pipeline import _foreign_news
+    c = lambda url, title: Candidate(url=url, source_id="s", title=title)
+    cands = {"a": c("https://x.com/international/1", "জর্ডানে তিনজনের মৃত্যুদণ্ড"),
+             "b": c("https://x.com/international/2", "সৌদিতে দুই বাংলাদেশির মৃত্যুদণ্ড"),
+             "c": c("https://x.com/national/3", "জর্ডানে তিনজনের মৃত্যুদণ্ড")}
+    assert _foreign_news(cands) == ["a"]

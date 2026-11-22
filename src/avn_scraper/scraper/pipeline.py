@@ -28,10 +28,10 @@ from .export import export_all
 from .extract import Extracted, extract
 from .blocklog import BlockLog, sync_to_db
 from .fetch import Fetcher
-from .geo import detect_districts
+from .geo import about_bangladesh, detect_districts
 from .normalize import detect_language
 from .storage import PostgresStorage, Storage
-from .urls import article_id, host_of, same_site, slug_text
+from .urls import article_id, host_of, international_section, off_topic_section, same_site, slug_text
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +184,12 @@ def _cap_per_source(candidates: list[Candidate], cap: Any, now: datetime) -> tup
         else:
             left_out[c.source_id] += 1
     return selected, dict(left_out)
+
+
+def _foreign_news(candidates: dict[str, Candidate]) -> list[str]:
+    """Keys of world-news links whose headline, summary and URL don't mention Bangladesh."""
+    return [k for k, c in candidates.items() if international_section(c.url)
+            and not about_bangladesh(f"{c.title} {c.summary} {slug_text(c.url)}")]
 
 
 def _keyword_hits(classifier: Classifier, candidates: dict[str, Candidate]) -> dict[str, Candidate]:
@@ -420,6 +426,16 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         # 2. filter: fresh, unseen, keyword pre-filter, per-outlet cap
         merged = _merge(candidates)
         stats["candidates"] = len(merged)
+        # Sports, entertainment, business, ... never carry our topics: not downloaded.
+        off_topic = [k for k, c in merged.items() if off_topic_section(c.url)]
+        for k in off_topic:
+            del merged[k]
+        stats["off_topic_skipped"] = len(off_topic)
+        # World news only when the headline is about Bangladesh (Bangladeshis executed abroad, ...).
+        foreign = await asyncio.to_thread(_foreign_news, merged)
+        for k in foreign:
+            del merged[k]
+        stats["foreign_skipped"] = len(foreign)
         fresh = {k: c for k, c in merged.items() if not c.published_at or c.published_at >= cutoff}
         known = await storage.known_ids(fresh.keys())
         new = {k: c for k, c in fresh.items() if k not in known}
