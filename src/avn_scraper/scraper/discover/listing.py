@@ -13,7 +13,10 @@ from ..urls import same_site
 from . import Candidate
 
 _MIN_HEADLINE_CHARS = 12
-_SKIP_PATH = re.compile(r"/(tag|tags|topic|author|category|video|videos|photo|gallery|page|search|login)(/|$)", re.I)
+# Listing pages, not articles: tag/category/... paths (also "/category?catid=1", as on
+# ajkersylhet) and page-number links ("?page=2", "&pageno=3", the same keys sections.py pages by).
+_SKIP_PATH = re.compile(r"/(tag|tags|topic|author|category|video|videos|photo|gallery|page|search|login)(/|$|\?)"
+                        r"|[?&](page|pg|p|paged|pageno|page_no)=\d+(&|$)", re.I)
 
 
 def parse_listing(html: str, page_url: str, homepage: str, source_id: str) -> list[Candidate]:

@@ -49,6 +49,10 @@ search, archive, about/contact/privacy/terms, ads, subscriptions, RSS/sitemaps, 
 podcasts, live, polls, quizzes, horoscope, converters, apps, press releases, jobs.
 The full list is `_NOT_SECTION` in `src/avn_scraper/discover/sections.py`.
 
+On a homepage or tab page, links to tag, topic, category, author, video, photo, search and
+login pages (`/category/x`, `/category?catid=1`) and page-number links (`?page=2`,
+`&pageno=3`) are not taken as articles, so they are neither downloaded nor used as date probes.
+
 Tabs listed under `sections:` for an outlet in `sources.yaml` are always scanned as well.
 `auto_sections: false` turns auto-detection off for that outlet, so only the listed tabs
 are scanned. Use this for outlets whose menu is built by JavaScript (`avn check-sources`

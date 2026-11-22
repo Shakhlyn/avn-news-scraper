@@ -373,3 +373,16 @@ def test_extract_drops_a_guessed_bare_today():
     assert dt.date().isoformat() == "2026-11-20" and bare
     dt, bare = X._published(tree, [], "2026-11-22T09:15:00+06:00", now)
     assert dt.hour == 9 and not bare
+
+
+def test_listing_skips_category_and_page_number_links():
+    html = """<html><body>
+    <a href="/news-details?nid=22629">জৈন্তাপুরে সড়ক দুর্ঘটনায় মোটরসাইকেল আরোহী নিহত</a>
+    <a href="/category?catid=1&&pageno=2">পরবর্তী পৃষ্ঠার খবরগুলো দেখুন</a>
+    <a href="/category?catid=3">সিলেট বিভাগের সব খবর এখানে</a>
+    <a href="/archive?page=4">পুরনো খবরের আর্কাইভ দেখুন</a>
+    <a href="/national/news?p=12">আরও জাতীয় খবর পড়তে এখানে</a>
+    <a href="/story?id=5&pageview=1">এই খবরটি একটি আসল প্রতিবেদন</a>
+    </body></html>"""
+    urls = [c.url for c in parse_listing(html, "https://ajkersylhet.com/", "https://ajkersylhet.com/", "s")]
+    assert urls == ["https://ajkersylhet.com/news-details?nid=22629", "https://ajkersylhet.com/story?id=5&pageview=1"]
