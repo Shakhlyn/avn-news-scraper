@@ -482,3 +482,74 @@ def test_run_without_failures_still_writes_typed_files(tmp_path, monkeypatch):
     events = pq.read_table(blog.events_path)
     assert events.num_rows == 0 and events.schema.equals(EVENTS_SCHEMA)
     assert pq.read_table(blog.hosts_path).to_pylist()[0]["ok"] == 1
+
+
+# --- hard deadline per request -------------------------------------------------------------
+
+class _StuckCurlResponse(_FakeCurlResponse):
+    """A stream that never ends and, like a curl_cffi stream on a dead connection, only
+    closes once quit_now is set; a cancel alone does not stop it."""
+
+    def __init__(self):
+        super().__init__(200)
+        self.quit_now = asyncio.Event()
+
+    async def aiter_content(self):
+        yield b"<html>"
+        while not self.quit_now.is_set():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                continue  # ignores cancellation
+
+
+def test_request_past_deadline_is_a_timeout(monkeypatch):
+    _public_dns(monkeypatch)
+    monkeypatch.setattr(fetch, "_CANCEL_GRACE_SECONDS", 0.05)
+    url = "https://www.example-paper.com/slow"
+    stuck = _StuckCurlResponse()
+    sessions = []
+
+    class Session(_FakeCurl):
+        def __init__(self, **kwargs):
+            super().__init__({url: stuck})
+            self.closed = False
+            sessions.append(self)
+
+        async def close(self):  # closing the session ends its transfers
+            self.closed = True
+            stuck.quit_now.set()
+
+    monkeypatch.setattr(fetch, "AsyncSession", Session)
+    src = SimpleNamespace(homepage="https://www.example-paper.com/", fetch="impersonate")
+
+    async def go(f):
+        return await f.get(url), f.failures
+    resp, failures = _run(go, settings={"request_deadline_seconds": 0.1}, sources=[src])
+    assert resp is None and failures[url] == "network_error"
+    assert len(sessions) == 2 and sessions[0].closed  # the wedged session was replaced
+
+
+def test_trickling_plain_response_cut_at_deadline():
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:  # a byte now and then: each read is well inside timeout_seconds
+                yield b"a"
+                await asyncio.sleep(0.01)
+
+    async def go():
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, stream=Trickle()))
+        async with Fetcher({**SETTINGS, "request_deadline_seconds": 0.2}, transport=transport) as f:
+            return await f.get("https://93.184.216.34/slow"), f.failures
+    resp, failures = asyncio.run(go())
+    assert resp is None and failures["https://93.184.216.34/slow"] == "network_error"
+
+
+def test_leaving_a_curl_stream_early_tells_curl_to_stop(monkeypatch):
+    _public_dns(monkeypatch)
+    url = "https://www.example-paper.com/r"
+    first = _FakeCurlResponse(302, headers={"location": "https://www.example-paper.com/final"})
+    first.quit_now = asyncio.Event()
+    routes = {url: first, "https://www.example-paper.com/final": _FakeCurlResponse(200, b"<html>ok</html>")}
+    (resp, _) = _impersonated(routes, lambda f: f.get(url))
+    assert resp.text == "<html>ok</html>" and first.quit_now.is_set()

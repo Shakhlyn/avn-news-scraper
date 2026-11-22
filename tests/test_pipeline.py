@@ -195,3 +195,34 @@ def test_cap_per_source():
     selected, left_out = _cap_per_source(items, 2, now)
     assert [c.url for c in selected if c.source_id == "a"] == [f"{SITE}/news/4", f"{SITE}/news/3"]
     assert left_out == {"a": 3}
+
+
+def test_progress_line_and_periodic_log(caplog):
+    import logging
+    from types import SimpleNamespace
+    from avn_scraper.scraper.pipeline import Progress
+
+    fetcher = SimpleNamespace(requests_sent=8400, requests_failed=12,
+                              stopped_hosts=lambda: {"a.com": "x", "b.com": "y"})
+
+    async def go():
+        async with Progress(fetcher, every=0.02) as p:
+            p.start_phase("outlets scanned", 3)
+            await p.counted(asyncio.sleep(0))
+            await asyncio.sleep(0.07)
+            return p.line()
+
+    with caplog.at_level(logging.INFO, logger="avn_scraper.scraper.pipeline"):
+        line = asyncio.run(go())
+    assert line.startswith("progress: outlets scanned 1/3, 8,400 requests, 12 failed, 2 sites stopped, 0m0")
+    assert sum("progress: outlets scanned 1/3" in r.message for r in caplog.records) >= 2
+
+
+def test_progress_off_when_zero():
+    from types import SimpleNamespace
+    from avn_scraper.scraper.pipeline import Progress
+
+    async def go():
+        async with Progress(SimpleNamespace(), every=0) as p:
+            return p._task
+    assert asyncio.run(go()) is None

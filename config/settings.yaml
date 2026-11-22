@@ -15,7 +15,12 @@ daily_at: "23:30"
 http:
   user_agent: "Mozilla/5.0 (compatible; AVNNewsScraper/0.1; human-rights news monitoring)"
   robots_agent: AVNNewsScraper
-  timeout_seconds: 25
+  timeout_seconds: 25       # longest wait for the next bit of data
+  # Longest one request may take in total (redirects and the whole page), so a server that
+  # trickles data, or a stuck connection, can't hang the run. Per page, not per outlet: a slow
+  # outlet with many pages is not cut short. Normal pages take a few seconds. A request that
+  # runs over counts as a timeout (retried, and toward error_threshold).
+  request_deadline_seconds: 180
   concurrency: 32          # total parallel requests
   per_host_delay: 1.0      # seconds between requests to the same site
   per_host_jitter: 0.5     # plus a random 0-50% of that, so requests have no fixed rhythm
@@ -37,6 +42,11 @@ http:
   # fingerprint (curl_cffi), at least impersonate_delay seconds apart.
   impersonate: chrome
   impersonate_delay: 3.0
+
+# A run logs a progress line this often, in seconds (outlets scanned, articles downloaded,
+# requests sent, sites stopped). A full run takes about 40 min and mostly waits between paced
+# requests, so this is how to tell a slow run from a stuck one. 0 turns it off.
+progress_seconds: 60
 
 # Every new article in the window is downloaded and judged on its full text, so a story
 # with a plain headline (or deep in a tab or the print edition) is not missed.

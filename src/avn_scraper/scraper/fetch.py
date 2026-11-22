@@ -32,6 +32,7 @@ import time
 import zlib
 from collections import Counter, defaultdict
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -67,6 +68,58 @@ class ResponseTooLarge(Exception):
 
 class UnsupportedEncoding(Exception):
     pass
+
+
+class FetchDeadline(Exception):
+    """One request (all redirects and the whole body) ran past request_deadline_seconds."""
+
+    def __init__(self, message: str, abandoned: bool):
+        super().__init__(message)
+        self.abandoned = abandoned  # it would not stop when cancelled and is still running
+
+
+# After cancelling a request that ran past its deadline, how long to wait for it to clean up
+# before leaving it behind. A client stuck on a dead connection may never finish cancelling.
+_CANCEL_GRACE_SECONDS = 5.0
+
+
+async def _within(seconds: float, coro):
+    """Await coro, but give up after `seconds` even if it ignores cancellation.
+
+    asyncio.timeout() alone is not enough: it cancels once and then waits for the
+    cancelled code to return, and a client stuck on a dead connection (curl_cffi waits
+    for the whole transfer when a stream is closed) may never return.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=seconds)
+    except asyncio.CancelledError:  # the run itself is being stopped
+        task.cancel()
+        raise
+    if done:
+        return task.result()
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=_CANCEL_GRACE_SECONDS)
+    if not done:
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # no "never retrieved" noise
+    elif not task.cancelled() and task.exception() is None:
+        return task.result()  # finished just as the deadline passed
+    raise FetchDeadline(f"no complete answer within {seconds:g} s", abandoned=not done)
+
+
+@asynccontextmanager
+async def _abort_on_exit(r):
+    """Tell curl_cffi to drop the rest of a stream when we leave it (redirect, size cap, error).
+
+    Its stream close waits for the transfer to finish; without this, leaving early waits
+    for a body we don't want, and a stalled connection never ends.
+    """
+    try:
+        yield
+    finally:
+        quit_now = getattr(r, "quit_now", None)
+        if quit_now is not None:
+            quit_now.set()
 
 
 def _is_public_ip(value: str) -> bool:
@@ -177,6 +230,9 @@ class Fetcher:
         self.respect_robots = bool(s.get("respect_robots", True))
         self.max_bytes = int(float(s.get("max_response_mb", 20)) * 1024 * 1024)
         self.timeout = float(s.get("timeout_seconds", 25))
+        # timeout_seconds limits each wait for data, so a server that keeps sending a little
+        # (or a stuck connection) could hold a request forever. This caps one whole attempt.
+        self.request_deadline = float(s.get("request_deadline_seconds", 180))
         self.block_threshold = int(s.get("block_threshold", 3))
         self.error_threshold = int(s.get("error_threshold", 5))
         self.cooldown_hours = float(s.get("block_cooldown_hours", 12))
@@ -214,6 +270,7 @@ class Fetcher:
         self.failures: dict[str, str] = {}  # url -> reason, for the run log
         self._host_seq: Counter[str] = Counter()  # requests sent per host this run
         self._host_done: dict[str, float] = {}  # when the last request to the host finished
+        self._failed_attempts = 0
 
     async def __aenter__(self) -> Fetcher:
         await asyncio.to_thread(self.cooldowns.load)
@@ -221,8 +278,7 @@ class Fetcher:
             log.warning("%s is on a block cooldown until %s (%s); not fetching it",
                         host, entry["until"], entry.get("reason"))
         if self._impersonated and self._curl is None:
-            # trust_env=False: an environment proxy would hide the real peer address.
-            self._curl = AsyncSession(impersonate=self.impersonate, timeout=self.timeout, trust_env=False)
+            self._curl = self._new_curl()
             self._own_curl = True
         if self.block_log:
             await self.block_log.start(
@@ -231,12 +287,42 @@ class Fetcher:
                           "enabled": getattr(src, "enabled", True)} for key, src in self._sources])
         return self
 
+    def _new_curl(self) -> AsyncSession:
+        # trust_env=False: an environment proxy would hide the real peer address.
+        return AsyncSession(impersonate=self.impersonate, timeout=self.timeout, trust_env=False)
+
+    async def _reset_curl(self) -> None:
+        """Swap in a new curl session and close the old one, which ends its stuck transfers.
+
+        A curl transfer that will not stop when cancelled means the session is wedged, and
+        it would also keep the run from finishing. Other impersonated requests in flight on
+        the old session fail and are retried like any network error.
+        """
+        if not self._own_curl:
+            return
+        old, self._curl = self._curl, self._new_curl()
+        log.warning("a curl_cffi request would not stop; starting a new curl session")
+        try:
+            await asyncio.wait_for(old.close(), _CANCEL_GRACE_SECONDS)
+        except Exception as exc:  # the new session is in place; the old one is dropped either way
+            log.warning("closing the stuck curl session failed: %r", exc)
+
     async def __aexit__(self, *exc) -> None:
         if self.block_log:
             await self.block_log.finish()
         await self._client.aclose()
         if self._own_curl:
             await self._curl.close()
+
+    @property
+    def requests_sent(self) -> int:
+        """Requests sent this run, retries included."""
+        return sum(self._host_seq.values())
+
+    @property
+    def requests_failed(self) -> int:
+        """Attempts that got no answer (timeouts, connection errors) this run."""
+        return self._failed_attempts
 
     def source_for(self, host: str) -> str | None:
         key = _site_key(host)
@@ -345,7 +431,7 @@ class Fetcher:
             if url != referer:
                 headers["Referer"] = referer
             async with self._curl.stream("GET", url, headers=headers, allow_redirects=False,
-                                         timeout=self.timeout) as r:
+                                         timeout=self.timeout) as r, _abort_on_exit(r):
                 if r.primary_ip and not _is_public_ip(r.primary_ip):
                     raise BlockedURL(f"{url} (connected to {r.primary_ip})")
                 location = r.headers.get("location")
@@ -362,6 +448,17 @@ class Fetcher:
                 return httpx.Response(r.status_code, headers=kept, content=bytes(body),
                                       request=httpx.Request("GET", url))
         raise httpx.TooManyRedirects(f"{url}: more than {_MAX_REDIRECTS} redirects")
+
+    async def _fetch(self, url: str, impersonate: bool) -> httpx.Response:
+        get = self._get_impersonated if impersonate else self._get_capped
+        try:
+            return await _within(self.request_deadline, get(url))
+        except FetchDeadline as exc:
+            if exc.abandoned:
+                log.warning("%s: request did not stop %g s after its deadline", url, _CANCEL_GRACE_SECONDS)
+                if impersonate:
+                    await self._reset_curl()
+            raise
 
     async def _robots_for(self, url: str) -> RobotFileParser | None:
         parts = urlsplit(url)
@@ -449,13 +546,13 @@ class Fetcher:
                 self._host_seq[host] += 1
                 try:
                     async with self._sem:
-                        resp = await (self._get_impersonated(url) if impersonate else self._get_capped(url))
+                        resp = await self._fetch(url, impersonate)
                 except (BlockedURL, ResponseTooLarge, UnsupportedEncoding) as exc:
                     self.stats[type(exc).__name__] += 1
                     self.failures[url] = type(exc).__name__
                     log.warning("not fetching %s: %s", url, exc)
                     resp, unsafe, error = None, True, type(exc).__name__
-                except (httpx.HTTPError, CurlError) as exc:
+                except (httpx.HTTPError, CurlError, FetchDeadline) as exc:
                     resp = None
                     error = f"{type(exc).__name__}: {str(exc)[:200]}"
                     log.debug("fetch error %s: %r", url, exc)
@@ -470,6 +567,7 @@ class Fetcher:
             if unsafe:
                 return None
             if resp is None:
+                self._failed_attempts += 1
                 self._errors_in_row[host] += 1
                 if self._errors_in_row[host] >= self.error_threshold:
                     self._stop_unreachable(host, error or "error", url)

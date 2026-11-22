@@ -119,6 +119,11 @@ The very first run has no memory yet, so tabs without dates are read to the page
   retry counts), the site gets no more requests this run, so one site that never answers
   can't hold up the whole run (each try waits up to `timeout_seconds`, 25 s). There's no
   cooldown: the next run tries it again, and its articles are retried then.
+- **Hard limit per request:** one request (redirects and the whole page) gets at most
+  `request_deadline_seconds` (180 s), then it counts as a timeout. `timeout_seconds` only
+  limits each wait for data, so without this a site that trickles data, or a stuck
+  connection, could hang the run. It is per page, not per outlet, so a slow outlet with many
+  pages is never cut short.
 
 ## Blocks: never get the IP banned
 
@@ -142,6 +147,10 @@ A banned IP also stops every later test, so the scraper backs off before a site 
   apply, and `robots.txt` is still read as `AVNNewsScraper`.
 - Outlets whose blocks a fingerprint doesn't fix are `enabled: false`, with the reason as
   a comment in `sources.yaml`.
+- **Progress:** a run (and the service's daily scrape) logs a line every `progress_seconds`
+  (60 s): outlets scanned or articles downloaded so far out of the total, requests sent, failed
+  attempts, sites stopped, and time taken. A full run takes about 40 min at near 0% CPU, and
+  the block log only records failures, so this line is how to tell slow from stuck.
 - **Block log (permanent):** successful requests are only counted. Each scrape (run,
   dry run, `check-sources`) writes, in a folder named after the scrape's day in Asia/Dhaka:
   - `data/logs/blocks/2026-11-18/085935_run.jsonl`: the complete record. It holds

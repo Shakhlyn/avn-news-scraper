@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -32,6 +34,59 @@ from .storage import PostgresStorage, Storage
 from .urls import article_id, host_of, same_site, slug_text
 
 log = logging.getLogger(__name__)
+
+
+class Progress:
+    """Logs a progress line every `every` seconds while a run works.
+
+    A run spends most of its time waiting between paced requests (near 0% CPU), and the block
+    log only records failures, so without this a slow run looks the same as a stuck one.
+    """
+
+    def __init__(self, fetcher: Fetcher, every: float):
+        self.fetcher = fetcher
+        self.every = every
+        self.started = time.monotonic()
+        self.phase = "starting"
+        self.done = 0
+        self.total = 0
+        self._task: asyncio.Task | None = None
+
+    def start_phase(self, phase: str, total: int) -> None:
+        self.phase, self.done, self.total = phase, 0, total
+
+    async def counted(self, coro):
+        """Await coro and count it as one finished item of the current phase."""
+        try:
+            return await coro
+        finally:
+            self.done += 1
+
+    def line(self) -> str:
+        elapsed = int(time.monotonic() - self.started)
+        f = self.fetcher
+        parts = [f"{self.phase} {self.done}/{self.total}", f"{f.requests_sent:,} requests"]
+        if f.requests_failed:
+            parts.append(f"{f.requests_failed:,} failed")
+        if f.stopped_hosts():
+            parts.append(f"{len(f.stopped_hosts())} sites stopped")
+        return f"progress: {', '.join(parts)}, {elapsed // 60}m{elapsed % 60:02d}s"
+
+    async def _loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.every)
+            log.info("%s", self.line())
+
+    async def __aenter__(self) -> Progress:
+        if self.every > 0:
+            self._task = asyncio.create_task(self._loop())
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
 
 
 @dataclass
@@ -317,10 +372,12 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     block_log.window = (cutoff, started)
     stats["block_log"] = str(block_log.path)
     async with Fetcher(s.get("http") or {}, transport=transport, sources=cfg.sources,
-                       cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher:
+                       cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher, \
+            Progress(fetcher, float(s.get("progress_seconds", 60))) as progress:
         # 1. discover
-        results = await asyncio.gather(*(discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)
-                                         for src in sources))
+        progress.start_phase("outlets scanned", len(sources))
+        results = await asyncio.gather(*(progress.counted(
+            discover_source(fetcher, src, cutoff, cache, s.get("sections"), memory)) for src in sources))
         await asyncio.to_thread(cache.save)
         stats["sources"] = {r.source_id: {"ok": r.ok, "counts": r.counts, "endpoints": r.endpoints, "error": r.error}
                             for r in results}
@@ -351,8 +408,10 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         log.info("%d candidates, %d new, %d selected for download", len(merged), stats["new_candidates"], len(selected))
 
         # 3. fetch & extract
-        fetched = await asyncio.gather(*(_fetch_one(fetcher, c) for c in selected))
+        progress.start_phase("articles downloaded", len(selected))
+        fetched = await asyncio.gather(*(progress.counted(_fetch_one(fetcher, c)) for c in selected))
         stats["http"] = dict(fetcher.stats)
+        log.info("%s", progress.line().replace("progress:", "download done:"))
         if fetcher.stopped_hosts():
             stats["hosts_stopped"] = fetcher.stopped_hosts()
         # Hosts that refused or failed us, kept in the run record (JSON file and Postgres).
