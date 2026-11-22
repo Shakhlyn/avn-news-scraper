@@ -1,14 +1,14 @@
 """Backfill of past months from archive sitemaps (avn backfill)."""
 
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
-from avn_scraper.scraper.backfill import BackfillOptions, RunGate, parse_months, run_backfill
+from avn_scraper.scraper.backfill import BackfillOptions, Period, RunGate, parse_months, parse_periods, run_backfill
 from avn_scraper.scraper.config import Config, Source
 from avn_scraper.scraper.discover import Candidate
 from avn_scraper.scraper.discover.archive import headline_text, learn_layout, month_window
@@ -172,7 +172,7 @@ async def test_backfill_month_end_to_end(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords)
     requests: Counter = Counter()
     gate = RunGate(tmp_path / ".run.lock")
-    opts = BackfillOptions(months=[date(2025, 5, 1)])
+    opts = BackfillOptions(periods=[Period(date(2025, 5, 1), date(2025, 5, 31))])
 
     # A daily run once skipped the custody article as too old; the backfill must still take it.
     storage = await PostgresStorage.open(tmp_path)
@@ -192,7 +192,7 @@ async def test_backfill_month_end_to_end(tmp_path, cfg, database):
 
     storage = await PostgresStorage.open(tmp_path)
     try:
-        [row] = await storage.backfill_progress([date(2025, 5, 1)])
+        [row] = await storage.backfill_progress([Period(date(2025, 5, 1), date(2025, 5, 31))])
         assert (row["status"], row["saved"]) == ("done", 2)
         assert await storage.last_full_run() is None  # a backfill is not the daily run
         runs = await storage.query_df("SELECT stats->'backfill'->>'month' AS month FROM runs")
@@ -210,7 +210,7 @@ async def test_backfill_month_end_to_end(tmp_path, cfg, database):
 async def test_backfill_untitled_skip_and_dry_run(tmp_path, cfg, database):
     config = make_config(tmp_path, cfg.keywords, untitled="skip")
     requests: Counter = Counter()
-    opts = BackfillOptions(months=[date(2025, 5, 1)], dry_run=True)
+    opts = BackfillOptions(periods=[Period(date(2025, 5, 1), date(2025, 5, 31))], dry_run=True)
     [result] = await run_backfill(config, opts, transport=make_archive_site(requests),
                                   gate=RunGate(tmp_path / ".run.lock"))
     assert [r["title"] for r in result.saved] == [BORDER]
@@ -306,3 +306,87 @@ async def test_undated_sitemaps_are_skipped_after_one_file():
     result = await ArchiveReader(fetcher).month(source, layout, start, end)
     assert result.undated and result.candidates == []
     assert fetcher.asked == ["https://a.com/post-sitemap3.xml"]
+
+
+# -- days ----------------------------------------------------------------------
+
+def test_parse_periods_days_and_months():
+    assert parse_periods(["2024-08-05"], TODAY) == [Period(date(2024, 8, 5), date(2024, 8, 5))]
+    assert parse_periods(["2024-08-01..2024-08-07"], TODAY) == [Period(date(2024, 8, 1), date(2024, 8, 7))]
+    # months stay whole months, days and months can be mixed
+    assert parse_periods(["2025-05", "2024-08-05"], TODAY) == [Period(date(2024, 8, 5), date(2024, 8, 5)),
+                                                               Period(date(2025, 5, 1), date(2025, 5, 31))]
+    assert Period(date(2024, 8, 5), date(2024, 8, 5)).label == "2024-08-05"
+    assert Period(date(2024, 8, 2), date(2024, 8, 9)).label == "2024-08-02..2024-08-09"
+    assert Period(date(2025, 2, 1), date(2025, 2, 28)).label == "2025-02"
+
+
+@pytest.mark.parametrize("spec", ["2024-08-32", "2024-08-07..2024-08-01", "2024-07-01..2024-08-15",
+                                  f"{TODAY}", f"{TODAY - timedelta(days=1)}..{TODAY}"])
+def test_parse_periods_refuses_bad_days(spec):
+    with pytest.raises(ValueError):
+        parse_periods([spec], TODAY)
+
+
+@pytest.mark.anyio
+async def test_backfill_one_day_reads_only_that_day(tmp_path, cfg, database):
+    config = make_config(tmp_path, cfg.keywords)
+    requests: Counter = Counter()
+    gate = RunGate(tmp_path / ".run.lock")
+    day = Period(date(2025, 5, 3), date(2025, 5, 3))
+    [result] = await run_backfill(config, BackfillOptions(periods=[day]), transport=make_archive_site(requests),
+                                  gate=gate)
+    assert {r["title"] for r in result.saved} == {BORDER, CUSTODY}
+    daily = [p for p in requests if p.startswith("/sitemap/sitemap-daily-2025-05")]
+    assert daily == ["/sitemap/sitemap-daily-2025-05-03.xml"]  # not the other 30 days
+    assert result.sources["fake"]["status"] == "done"
+
+    storage = await PostgresStorage.open(tmp_path)
+    try:
+        [row] = await storage.backfill_progress([day], exact=True)
+        assert (row["month"], row["until"], row["status"]) == (date(2025, 5, 3), date(2025, 5, 3), "done")
+        # the day is its own period: the month is not marked done by it
+        assert await storage.backfill_progress([Period(date(2025, 5, 1), date(2025, 5, 31))], exact=True) == []
+        runs = await storage.query_df("SELECT stats->'backfill'->>'period' AS period FROM runs")
+        assert list(runs["period"]) == ["2025-05-03"]
+    finally:
+        await storage.close()
+
+    requests.clear()  # the same day again: done, nothing requested
+    [again] = await run_backfill(config, BackfillOptions(periods=[day]), transport=make_archive_site(requests),
+                                 gate=gate)
+    assert again.skipped and not requests
+
+
+@pytest.mark.anyio
+async def test_monthly_and_wordpress_files_filtered_to_the_days():
+    from avn_scraper.scraper.discover.archive import ArchiveReader, period_window
+    files = {"https://a.com/post-sitemap.xml": _wp_urlset(("may-3", "2025-05-03T10:00:00+06:00"),
+                                                          ("may-4-edit", "2025-05-04T22:00:00+06:00"),
+                                                          ("may-20", "2025-05-20T10:00:00+06:00"),
+                                                          ("may-1", "2025-05-01T10:00:00+06:00"))}
+    layout = learn_layout("x", _children("https://a.com/post-sitemap.xml"))
+    start, end = period_window(Period(date(2025, 5, 3), date(2025, 5, 3)), DHAKA, TODAY)
+    source = Source(id="x", name="X", language="bn", type="national", homepage="https://a.com/")
+    result = await ArchiveReader(_FakeFetcher(files)).month(source, layout, start, end)
+    # the day itself, and an edit within 2 days of it (the article's own date decides later)
+    assert sorted(c.url for c in result.candidates) == ["https://a.com/may-3/", "https://a.com/may-4-edit/"]
+
+
+def test_parse_quarters_of_a_month():
+    q = lambda spec: [(p.start, p.end, p.label) for p in parse_periods([spec], TODAY)]
+    assert q("2024-08-q1") == [(date(2024, 8, 1), date(2024, 8, 7), "2024-08-q1")]
+    assert q("2024-08-q2") == [(date(2024, 8, 8), date(2024, 8, 15), "2024-08-q2")]
+    assert q("2024-08-q3") == [(date(2024, 8, 16), date(2024, 8, 23), "2024-08-q3")]
+    assert q("2024-08-q4") == [(date(2024, 8, 24), date(2024, 8, 31), "2024-08-q4")]
+    assert q("2024-02-q4") == [(date(2024, 2, 24), date(2024, 2, 29), "2024-02-q4")]  # leap year
+    assert q("2024-08-Q1..2024-08-q2") == [(date(2024, 8, 1), date(2024, 8, 15), "2024-08-01..2024-08-15")]
+    # the same days typed out are the same period (shared progress)
+    assert parse_periods(["2024-08-01..2024-08-07"], TODAY) == parse_periods(["2024-08-q1"], TODAY)
+
+
+@pytest.mark.parametrize("spec", ["2024-08-q5", "2024-08-q0", "2024-13-q1", "2024-08-q3..2024-08-q1",
+                                  f"{TODAY:%Y-%m}-q4"])
+def test_parse_quarters_refuses(spec):
+    with pytest.raises(ValueError):
+        parse_periods([spec], TODAY)

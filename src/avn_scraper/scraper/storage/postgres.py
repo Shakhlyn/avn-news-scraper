@@ -149,19 +149,24 @@ class PostgresStorage(Storage):
                        "AND published_at < %s", (start, end))
         return [(r["id"], r["story_cluster_id"], r["title"]) for r in rows]
 
-    async def backfill_progress(self, months: Iterable[Any] | None = None) -> list[dict[str, Any]]:
-        if months is None:
-            return await fetch_all(self.conn, "SELECT * FROM backfill_progress ORDER BY month, source_id")
-        return await fetch_all(self.conn, "SELECT * FROM backfill_progress WHERE month = ANY(%s) "
-                                          "ORDER BY month, source_id", (list(months),))
+    async def backfill_progress(self, periods: Iterable[Any] | None = None,
+                                exact: bool = False) -> list[dict[str, Any]]:
+        if periods is None:
+            return await fetch_all(self.conn, "SELECT * FROM backfill_progress ORDER BY month, until, source_id")
+        periods = list(periods)
+        starts, ends = [p.start for p in periods], [p.end for p in periods]
+        match = "(b.month = p.s AND b.until = p.e)" if exact else "(b.month <= p.e AND b.until >= p.s)"
+        return await fetch_all(
+            self.conn, "SELECT DISTINCT b.* FROM backfill_progress b, unnest(%s::date[], %s::date[]) AS p(s, e) "
+                       f"WHERE {match} ORDER BY b.month, b.until, b.source_id", (starts, ends))
 
     async def save_backfill_progress(self, row: dict[str, Any]) -> None:
-        cols = ("source_id", "month", "status", "layout", "candidates", "downloaded", "saved", "stats", "run_id")
+        cols = ("source_id", "month", "until", "status", "layout", "candidates", "downloaded", "saved", "stats", "run_id")
         values = [Jsonb(row.get(c)) if c == "stats" else row.get(c) for c in cols]
-        updates = ",".join(f"{c}=excluded.{c}" for c in cols[2:])
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols[3:])
         await self.conn.execute(
             f"INSERT INTO backfill_progress({','.join(cols)}, updated_at) VALUES ({','.join(['%s'] * len(cols))}, now()) "
-            f"ON CONFLICT(source_id, month) DO UPDATE SET {updates}, updated_at=now()", values)
+            f"ON CONFLICT(source_id, month, until) DO UPDATE SET {updates}, updated_at=now()", values)
 
     async def mark_seen(self, rows: Iterable[tuple[str, str, str]]) -> None:
         now = datetime.now(timezone.utc)

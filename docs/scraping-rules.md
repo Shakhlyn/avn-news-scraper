@@ -212,11 +212,15 @@ A banned IP also stops every later test, so the scraper backs off before a site 
   `cf-mitigated: challenge` means try `fetch: impersonate`; a challenge even then needs a
   real browser (not built); a timeout or 403 only from one machine means an IP block.
 
-## Backfill: past months (`avn backfill`)
+## Backfill: past months or days (`avn backfill`)
 
-The daily run only looks back 30 hours. Past months are scraped on demand:
+The daily run only looks back 30 hours. Past months or days are scraped on demand:
 
 ```
+avn backfill 2024-08-05               # one day
+avn backfill 2024-08-01..2024-08-07   # a range of days (one period, at most 31 days)
+avn backfill 2024-08-q1               # a quarter of a month: q1 = days 1-7, q2 = 8-15,
+                                      # q3 = 16-23, q4 = 24 to the end (q1..q2 = days 1-15)
 avn backfill 2025-05                  # one month
 avn backfill 2025-05 2025-08          # several months
 avn backfill 2025-01..2025-06         # a range
@@ -225,6 +229,11 @@ avn backfill 2024-11..2026-10 --sources prothomalo,samakal --dry-run
 avn backfill --status                 # what is done, partial, left to retry
 ```
 
+- **Days instead of months** send far fewer requests: outlets with one sitemap file per day
+  have only those days' files read, and from monthly, yearly or WordPress files only entries
+  dated in the period are taken (an entry's `lastmod` may be up to 2 days after a single day,
+  or up to the period's length, because edits move it later). Days must be before today.
+  A day range is one period: progress, the run record and the log are for the whole range.
 - **Where old articles come from:** each outlet's archive sitemaps, found from `robots.txt`
   (or `/sitemap.xml`). Outlets split them by date: one file per day
   (`sitemap-daily-2025-05-01.xml`, `daily-sitemap/2025-05-01/sitemap.xml`), per month
@@ -258,12 +267,13 @@ avn backfill --status                 # what is done, partial, left to retry
   `lastmod` and no date in the file name, so no month can be picked. After the first such
   file the rest of the series is not read, and the outlet is `no_archive` (layout `undated`).
   The daily run still reads them.
-- **Resuming:** progress is kept per outlet and month in `backfill_progress`: `done`,
+- **Resuming:** progress is kept per outlet and period (`month` = first day, `until` = last day)
+  in `backfill_progress`: `done`,
   `no_archive` (no dated sitemaps found, or entries without dates: nothing to do), `partial` (the site was stopped or
   on cooldown, downloads failed temporarily, or the month isn't over) or `failed` (sitemap
   not reachable). Articles are saved one by one. Run the same command again: `done` and
   `no_archive` are skipped, the rest retried, known links not downloaded again. `--redo`
-  repeats done months.
+  repeats done periods.
 - **Not possible from sitemaps (2026-11 probe):** janakantha, ntv, observerbd, unb, rtv and
   ekhontv have no sitemap; jamunatv and dailysun daily sitemaps list `#` instead of links;
   gramerkagoj's article sitemaps carry no dates.

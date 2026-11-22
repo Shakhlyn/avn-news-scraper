@@ -35,12 +35,14 @@ class Storage(ABC):
         """[(article_id, story_cluster_id, title)] for articles published in [start, end)."""
 
     @abstractmethod
-    async def backfill_progress(self, months: Iterable[Any] | None = None) -> list[dict[str, Any]]:
-        """Rows of backfill_progress, for the given months (first days) or all."""
+    async def backfill_progress(self, periods: Iterable[Any] | None = None,
+                                exact: bool = False) -> list[dict[str, Any]]:
+        """Rows of backfill_progress: all, those overlapping the given periods (objects with
+        .start and .end dates), or with exact=True those of exactly these periods."""
 
     @abstractmethod
     async def save_backfill_progress(self, row: dict[str, Any]) -> None:
-        """Insert or replace one (source_id, month) row."""
+        """Insert or replace one (source_id, month, until) row."""
 
     @abstractmethod
     async def save_article(self, record: dict[str, Any], raw_html: str | None) -> None: ...

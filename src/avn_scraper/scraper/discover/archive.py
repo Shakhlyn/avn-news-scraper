@@ -91,9 +91,19 @@ def learn_layout(source_id: str, children: list[tuple[str, datetime | None]],
 def month_window(month: date, tz: ZoneInfo, today: date | None = None) -> tuple[datetime, datetime]:
     """[first moment, moment after the last day) of the month in tz, never past today."""
     last = date(month.year, month.month, calendar.monthrange(month.year, month.month)[1])
+    return day_window(month, last, tz, today)
+
+
+def day_window(first: date, last: date, tz: ZoneInfo, today: date | None = None) -> tuple[datetime, datetime]:
+    """[first moment of `first`, moment after `last`) in tz, never past today."""
     if today and last >= today:
         last = today - timedelta(days=1)
-    return datetime.combine(month, time(), tz), datetime.combine(last + timedelta(days=1), time(), tz)
+    return datetime.combine(first, time(), tz), datetime.combine(last + timedelta(days=1), time(), tz)
+
+
+def period_window(period, tz: ZoneInfo, today: date | None = None) -> tuple[datetime, datetime]:
+    """The window of a backfill Period (anything with .start and .end dates)."""
+    return day_window(period.start, period.end, tz, today)
 
 
 async def _read(fetcher: Fetcher, url: str) -> tuple[list[tuple[str, datetime | None]], list[dict]] | None:
@@ -166,8 +176,14 @@ class ArchiveReader:
         return self._cache[url]
 
     async def month(self, source: Source, layout: ArchiveLayout, start: datetime, end: datetime) -> ArchiveResult:
+        """Candidates published in [start, end): a whole month, a day or a range of days."""
         result = ArchiveResult(source.id)
         found: dict[str, Candidate] = {}
+        # A monthly file belongs to a whole-month window; for part of a month its entries are
+        # picked by date like any other. lastmod can trail publication (edits), so entries up to
+        # _LASTMOD_SLACK after a month are kept, scaled down for shorter windows (2 days for one day).
+        whole_month = start.day == 1 and end.day == 1 and (end - start).days >= 28
+        slack = min(_LASTMOD_SLACK, max(timedelta(days=2), end - start))
 
         def add(entries: list[dict], trusted: bool) -> None:
             """trusted: the file is named after this period, so its entries belong to it
@@ -180,7 +196,7 @@ class ArchiveReader:
                 if not trusted:
                     # lastmod is never before publication: older entries are out; much
                     # later ones were edited long after and are (mostly) not ours.
-                    if when is None or when < start or when >= end + _LASTMOD_SLACK:
+                    if when is None or when < start or when >= end + slack:
                         continue
                 if loc not in found:
                     found[loc] = Candidate(url=loc, source_id=source.id, title=e["title"],
@@ -201,15 +217,17 @@ class ArchiveReader:
 
         days = [start.date() + timedelta(days=i) for i in range((end.date() - start.date()).days)]
         jobs = [dated(d.strftime(t), True) for t in sorted(layout.daily) for d in days]
-        jobs += [dated(start.strftime(t), True) for t in sorted(layout.monthly)]
+        months = sorted({d.replace(day=1) for d in days})
+        jobs += [dated(m.strftime(t), whole_month) for t in sorted(layout.monthly) for m in months]
         await asyncio.gather(*jobs)
         for tmpl in sorted(layout.yearly):
-            parsed = await self._cached(tmpl.replace("{year}", str(start.year)))
-            if parsed is None:
-                result.missing += 1
-                continue
-            result.files += 1
-            add(parsed[1], False)
+            for year in sorted({d.year for d in days}):
+                parsed = await self._cached(tmpl.replace("{year}", str(year)))
+                if parsed is None:
+                    result.missing += 1
+                    continue
+                result.files += 1
+                add(parsed[1], False)
         if not (layout.daily or layout.monthly or layout.yearly):
             add(layout.entries, False)
             older: set[str] = set()  # families already read back past the month

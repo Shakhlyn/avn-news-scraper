@@ -129,7 +129,7 @@ database `avndb`, user `avn`, and your password.
 | Command | Does |
 |---|---|
 | `avn run` | Scrape now (`--dry-run` to save nothing, `--since 72` to look back 72 h, `--sources a,b` for some outlets only) |
-| `avn backfill 2025-05` | Scrape a past month (also `2025-01..2025-06` or `2025`). Takes hours; try `--dry-run` first. `--status` shows progress |
+| `avn backfill 2025-05` | Scrape a past month (also `2025-01..2025-06` or `2025`), or days: `2024-08-05`, `2024-08-01..2024-08-07` (at most 31), `2024-08-q1` (a quarter of a month). A month takes hours, a day minutes; try `--dry-run` first. `--status` shows progress |
 | `avn check-sources` | Which outlets work, and how we read them (`--refresh` to look for feeds again) |
 | `avn reclassify` | Re-apply the keywords to stored articles (no internet needed) |
 | `avn export` | Rebuild the CSV / Excel files |

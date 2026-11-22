@@ -1,10 +1,11 @@
-"""Backfill: scrape past months on demand (`avn backfill 2025-05`), next to the daily run.
+"""Backfill: scrape past months or days on demand (`avn backfill 2025-05`, `avn backfill
+2024-08-05`, `avn backfill 2024-08-01..2024-08-07`), next to the daily run.
 
-Old articles come from each outlet's archive sitemaps (discover/archive.py). Each month is
-one run: discover -> skip known -> keyword pre-filter -> download -> classify -> store,
-with the same rules as the daily run, saved article by article. Progress is kept per
-outlet and month in `backfill_progress`, so an interrupted backfill resumes. While the
-daily scrape (or `avn run`) holds the run lock, the backfill waits.
+Old articles come from each outlet's archive sitemaps (discover/archive.py). Each period (a
+month, a day or a range of days) is one run: discover -> skip known -> keyword pre-filter ->
+download -> classify -> store, with the same rules as the daily run, saved article by article.
+Progress is kept per outlet and period in `backfill_progress`, so an interrupted backfill
+resumes. While the daily scrape (or `avn run`) holds the run lock, the backfill waits.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from .blocklog import BlockLog, sync_to_db
 from .classify import Classifier
 from .config import Config, Source
 from .discover import Candidate
-from .discover.archive import ArchiveLayout, ArchiveReader, ArchiveResult, discover_layout, headline_text, month_window
+from .discover.archive import ArchiveLayout, ArchiveReader, ArchiveResult, discover_layout, headline_text, period_window
 from .export import export_all
 from .fetch import Fetcher
 from .lock import is_locked
@@ -40,6 +41,11 @@ from .urls import article_id, host_of, international_section, off_topic_section,
 log = logging.getLogger(__name__)
 
 _MONTH = re.compile(r"^(\d{4})-(\d{1,2})$")
+_DAY = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+_QUARTER = re.compile(r"^(\d{4})-(\d{1,2})-q(\d)$", re.I)
+# Quarters of a month (2024-08-q1): days 1-7, 8-15, 16-23 and 24 to the month's end.
+_QUARTER_DAYS = ((1, 7), (8, 15), (16, 23), (24, None))
+_MAX_DAY_RANGE = 31  # longer: use months
 _YEAR = re.compile(r"^(\d{4})$")
 UNTITLED = ("download", "skip")
 # Sections with no article text; untitled links in them are not downloaded.
@@ -60,6 +66,86 @@ def _months_between(first: date, last: date) -> list[date]:
         out.append(d)
         d = date(d.year + d.month // 12, d.month % 12 + 1, 1)
     return out
+
+
+@dataclass(frozen=True, order=True)
+class Period:
+    """A stretch of past days to backfill: a whole month, one day or a range of days."""
+    start: date
+    end: date  # last day, included
+
+    @property
+    def is_month(self) -> bool:
+        return self.start.day == 1 and self.end == _month_end(self.start)
+
+    @property
+    def label(self) -> str:
+        if self.is_month:
+            return f"{self.start:%Y-%m}"
+        if (q := self._quarter()) is not None:
+            return f"{self.start:%Y-%m}-q{q}"
+        return f"{self.start}" if self.start == self.end else f"{self.start}..{self.end}"
+
+
+    def _quarter(self) -> int | None:
+        if (self.start.year, self.start.month) != (self.end.year, self.end.month):
+            return None
+        for n, (first, last) in enumerate(_QUARTER_DAYS, 1):
+            if self.start.day == first and self.end == (self.end.replace(day=last) if last else _month_end(self.end)):
+                return n
+        return None
+
+
+def _month_end(d: date) -> date:
+    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
+
+def _day(spec: str) -> date:
+    m = _DAY.match(spec)
+    try:
+        if m:
+            return date(int(m[1]), int(m[2]), int(m[3]))
+    except ValueError:
+        pass
+    raise ValueError(f"not a day: {spec!r} (use YYYY-MM-DD)")
+
+
+def _quarter(spec: str) -> tuple[date, date]:
+    """'2024-08-q1' -> (2024-08-01, 2024-08-07); q4 runs to the month's last day."""
+    m = _QUARTER.match(spec)
+    if not m or not 1 <= int(m[2]) <= 12 or not 1 <= int(m[3]) <= 4:
+        raise ValueError(f"not a quarter of a month: {spec!r} (use YYYY-MM-q1 .. q4)")
+    first_day, last_day = _QUARTER_DAYS[int(m[3]) - 1]
+    month = date(int(m[1]), int(m[2]), 1)
+    return month.replace(day=first_day), month.replace(day=last_day) if last_day else _month_end(month)
+
+
+def parse_periods(specs: list[str], today: date) -> list[Period]:
+    """Months as in parse_months, plus days: '2024-08-05' (one day), '2024-08-01..2024-08-07'
+    (one period of days, at most 31) and quarters of a month, '2024-08-q1' .. 'q4' (days 1-7,
+    8-15, 16-23, 24-end; '2024-08-q1..2024-08-q2' is days 1-15). Days must be before today."""
+    periods: set[Period] = set()
+    months: list[str] = []
+    for spec in specs:
+        for part in (p.strip() for p in spec.split(",") if p.strip()):
+            ends = [x.strip() for x in part.split("..", 1)]
+            if all(_QUARTER.match(x) for x in ends):  # quarters become their days
+                ends = [str(_quarter(ends[0])[0]), str(_quarter(ends[-1])[1])]
+                part = "..".join(ends)
+            if not all(_DAY.match(x) for x in ends):
+                months.append(part)
+                continue
+            first, last = _day(ends[0]), _day(ends[-1])
+            if last < first:
+                raise ValueError(f"range goes backwards: {part!r}")
+            if last >= today:
+                raise ValueError(f"{part}: only days before today (the daily run covers today)")
+            if (last - first).days + 1 > _MAX_DAY_RANGE:
+                raise ValueError(f"{part}: more than {_MAX_DAY_RANGE} days; use months, e.g. 2024-08")
+            periods.add(Period(first, last))
+    if months:  # the current month stays one period: its window stops at yesterday, status partial
+        periods.update(Period(m, _month_end(m)) for m in parse_months(months, today))
+    return sorted(periods)
 
 
 def parse_months(specs: list[str], today: date) -> list[date]:
@@ -117,16 +203,16 @@ def _select(candidates: dict[str, Candidate], known: set[str], classifier: Class
 
 @dataclass
 class BackfillOptions:
-    months: list[date]
+    periods: list[Period]
     only_sources: list[str] | None = None
     dry_run: bool = False
-    redo: bool = False  # also redo outlet-months already done
+    redo: bool = False  # also redo outlet-periods already done
     untitled: str | None = None  # None = settings.yaml backfill.untitled
 
 
 @dataclass
-class MonthResult:
-    month: date
+class PeriodResult:
+    period: Period
     run_id: str | None = None
     skipped: bool = False  # every outlet already done
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -174,7 +260,7 @@ def _http_settings(settings: dict[str, Any]) -> dict[str, Any]:
 
 async def run_backfill(cfg: Config, opts: BackfillOptions, transport: httpx.AsyncBaseTransport | None = None,
                        gate: RunGate | None = None,
-                       on_month: Callable[[MonthResult], None] | None = None) -> list[MonthResult]:
+                       on_period: Callable[[PeriodResult], None] | None = None) -> list[PeriodResult]:
     untitled = opts.untitled or (cfg.settings.get("backfill") or {}).get("untitled", "download")
     if untitled not in UNTITLED:
         raise ValueError(f"untitled must be one of {UNTITLED}")
@@ -184,16 +270,16 @@ async def run_backfill(cfg: Config, opts: BackfillOptions, transport: httpx.Asyn
     classifier = await asyncio.to_thread(Classifier, cfg.keywords)
     layouts: dict[str, ArchiveLayout] = {}
     reader = ArchiveReader()
-    results: list[MonthResult] = []
+    results: list[PeriodResult] = []
     try:
         if not opts.dry_run:
             await storage.upsert_sources(cfg.sources)
-        for month in opts.months:
-            result = await _backfill_month(cfg, opts, storage, month, untitled, classifier, layouts, reader,
-                                           transport, gate)
+        for period in opts.periods:
+            result = await _backfill_period(cfg, opts, storage, period, untitled, classifier, layouts, reader,
+                                            transport, gate)
             results.append(result)
-            if on_month:
-                on_month(result)
+            if on_period:
+                on_period(result)
         if not opts.dry_run and any(r.outcome.get("saved") for r in results):
             await export_all(storage, cfg.data_dir / "exports", classifier.labels, cfg.timezone)
     finally:
@@ -201,15 +287,15 @@ async def run_backfill(cfg: Config, opts: BackfillOptions, transport: httpx.Asyn
     return results
 
 
-async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, month: date, untitled: str,
-                          classifier: Classifier, layouts: dict[str, ArchiveLayout], reader: ArchiveReader,
-                          transport: httpx.AsyncBaseTransport | None, gate: RunGate) -> MonthResult:
+async def _backfill_period(cfg: Config, opts: BackfillOptions, storage: Storage, period: Period, untitled: str,
+                           classifier: Classifier, layouts: dict[str, ArchiveLayout], reader: ArchiveReader,
+                           transport: httpx.AsyncBaseTransport | None, gate: RunGate) -> PeriodResult:
     tz = ZoneInfo(cfg.timezone)
     today = datetime.now(tz).date()
-    start, end = month_window(month, tz, today)
-    result = MonthResult(month)
-    finished_month = end.date() > date(month.year, month.month, calendar.monthrange(month.year, month.month)[1])
-    done = set() if opts.redo else {r["source_id"] for r in await storage.backfill_progress([month])
+    start, end = period_window(period, tz, today)
+    result = PeriodResult(period)
+    finished = end.date() > period.end  # the whole period is in the past
+    done = set() if opts.redo else {r["source_id"] for r in await storage.backfill_progress([period], exact=True)
                                     if r["status"] in FINISHED}
     sources = [s for s in cfg.sources if s.enabled and (not opts.only_sources or s.id in opts.only_sources)
                and s.id not in done]
@@ -259,7 +345,7 @@ async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, 
 
         known = await storage.known_ids(candidates.keys(), include_old=False)
         selected = await asyncio.to_thread(_select, candidates, known, classifier, untitled, per)
-        log.info("backfill %s: %d candidates, %d known, %d to download", f"{month:%Y-%m}", len(candidates),
+        log.info("backfill %s: %d candidates, %d known, %d to download", period.label, len(candidates),
                  len(known), len(selected))
 
         judge = Judge(classifier=classifier, storage=storage, tz=tz, run_id=run_id, by_id=by_id,
@@ -310,7 +396,7 @@ async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, 
             status = "no_archive"
             if arch.undated:
                 info[src.id]["layout"] = "undated"
-        elif stopped or counts["temporary_failures"] or not finished_month:
+        elif stopped or counts["temporary_failures"] or not finished:
             status = "partial"
         else:
             status = "done"
@@ -318,15 +404,16 @@ async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, 
         result.sources[src.id] = {**info[src.id], **counts}
         if not opts.dry_run:
             await storage.save_backfill_progress({
-                "source_id": src.id, "month": month, "status": status, "layout": info[src.id]["layout"],
+                "source_id": src.id, "month": period.start, "until": period.end, "status": status, "layout": info[src.id]["layout"],
                 "candidates": counts["candidates"], "downloaded": counts["downloaded"], "saved": counts["saved"],
                 "stats": result.sources[src.id], "run_id": run_id})
 
-    finished = datetime.now(timezone.utc)
-    result.duration = round((finished - started).total_seconds(), 1)
+    finished_at = datetime.now(timezone.utc)
+    result.duration = round((finished_at - started).total_seconds(), 1)
     stats = {"run_id": run_id, "started_at": started.isoformat(timespec="seconds"),
-             "finished_at": finished.isoformat(timespec="seconds"), "duration_seconds": result.duration,
-             "backfill": {"month": f"{month:%Y-%m}", "from": start.isoformat(), "to": end.isoformat()},
+             "finished_at": finished_at.isoformat(timespec="seconds"), "duration_seconds": result.duration,
+             "backfill": {"period": period.label, "month": f"{period.start:%Y-%m}",
+                          "from": start.isoformat(), "to": end.isoformat()},
              "dry_run": opts.dry_run, "sources": result.sources, "outcome": dict(result.outcome),
              "http": http_stats, "block_log": str(block_log.path)}
     if result.stopped:
@@ -334,6 +421,6 @@ async def _backfill_month(cfg: Config, opts: BackfillOptions, storage: Storage, 
     await sync_to_db(storage, cfg.block_log_dir)
     if not opts.dry_run:
         await storage.save_run(run_id, stats["started_at"], stats["finished_at"], stats)
-        name = f"{started.astimezone(tz):%Y-%m-%d_%H%M%S}_backfill-{month:%Y-%m}.json"
+        name = f"{started.astimezone(tz):%Y-%m-%d_%H%M%S}_backfill-{period.label.replace('..', '_')}.json"
         await asyncio.to_thread(_write_run_log, cfg.data_dir / "logs" / "runs" / name, stats)
     return result
