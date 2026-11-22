@@ -300,3 +300,45 @@ async def test_articles_are_judged_as_they_download_not_all_at_the_end(tmp_path,
     result = await run_pipeline(make_config(tmp_path, cfg.keywords), RunOptions(), transport=make_site(Counter()))
     assert events.count("downloaded") >= 3 and result.stats["outcome"]
     assert events.index("judged") < len(events) - 1 - events[::-1].index("downloaded")
+
+
+def test_as_downloaded_keeps_no_finished_results():
+    """A finished download must not stay referenced after the caller has used it."""
+    import gc
+    import weakref
+    from avn_scraper.scraper.pipeline import as_downloaded
+
+    class Page:
+        pass
+
+    async def fetch(n):
+        await asyncio.sleep(0.001 * n)
+        return Page()
+
+    async def go():
+        refs = []
+        async for page in as_downloaded([fetch(n) for n in range(50)]):
+            refs.append(weakref.ref(page))
+            del page
+            gc.collect()
+        return refs
+
+    refs = asyncio.run(go())
+    gc.collect()
+    assert len(refs) == 50 and sum(r() is not None for r in refs) == 0
+
+
+def test_as_downloaded_passes_errors_on():
+    from avn_scraper.scraper.pipeline import as_downloaded
+
+    async def ok():
+        return 1
+
+    async def broken():
+        raise RuntimeError("boom")
+
+    async def go():
+        return [x async for x in as_downloaded([ok(), broken(), ok()])]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(go())

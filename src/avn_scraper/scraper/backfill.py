@@ -33,7 +33,7 @@ from .discover.archive import ArchiveLayout, ArchiveReader, ArchiveResult, disco
 from .export import export_all
 from .fetch import Fetcher
 from .lock import is_locked
-from .pipeline import _PERMANENT_FAILURES, Judge, _fetch_one, _save, _write_run_log
+from .pipeline import _PERMANENT_FAILURES, Judge, _fetch_one, _save, _write_run_log, as_downloaded
 from .storage import PostgresStorage, Storage
 from .geo import about_bangladesh
 from .urls import article_id, host_of, international_section, off_topic_section, slug_text
@@ -357,10 +357,9 @@ async def _backfill_period(cfg: Config, opts: BackfillOptions, storage: Storage,
             await gate.wait()
             return await _fetch_one(fetcher, c)
 
-        tasks = [asyncio.create_task(fetch(c)) for c in selected]
+        downloads = as_downloaded([fetch(c) for c in selected])
         try:
-            for next_done in asyncio.as_completed(tasks):
-                c, html, ex = await next_done
+            async for c, html, ex in downloads:
                 counts = per[c.source_id]
                 counts["downloaded"] += ex is not None
                 reason = fetcher.failures.get(c.url, "network_error")
@@ -379,8 +378,7 @@ async def _backfill_period(cfg: Config, opts: BackfillOptions, storage: Storage,
                     await storage.mark_seen(seen)
                     seen = []
         finally:
-            for t in tasks:
-                t.cancel()
+            await downloads.aclose()
             if seen and not opts.dry_run:
                 await storage.mark_seen(seen)
         ours = {host_of(src.homepage) for src in sources}

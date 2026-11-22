@@ -10,7 +10,8 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable
+from typing import Any, TypeVar
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,7 @@ from .storage import PostgresStorage, Storage
 from .urls import article_id, host_of, international_section, off_topic_section, same_site, slug_text
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 class RunTooLong(Exception):
@@ -239,6 +241,43 @@ class Verdict:
     html: str | None = None
     seen: list[tuple[str, str, str]] = field(default_factory=list)  # rows for seen_urls
     failed: dict[str, str] | None = None
+
+
+async def as_downloaded(fetches: list[Awaitable[T]], buffer: int = 256) -> AsyncIterator[T]:
+    """Results of `fetches` (all started at once) in the order they finish.
+
+    A finished task hands its result to a queue and keeps none itself, so a downloaded page lives
+    only until the caller is done with it. (asyncio.as_completed over a task list kept every
+    page: each finished task holds its result for as long as the list exists.) The queue is
+    bounded, so if the caller falls behind, downloads wait instead of piling up.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=buffer)
+
+    async def deliver(fetch: Awaitable[T]) -> None:
+        try:
+            item: Any = await fetch
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # the caller re-raises it, as as_completed would
+            item = _Failed(exc)
+        await queue.put(item)
+
+    tasks = [asyncio.create_task(deliver(f)) for f in fetches]
+    del fetches
+    try:
+        for _ in range(len(tasks)):
+            item = await queue.get()
+            if isinstance(item, _Failed):
+                raise item.exc
+            yield item
+    finally:
+        for t in tasks:
+            t.cancel()
+
+
+@dataclass
+class _Failed:
+    exc: BaseException
 
 
 @dataclass
@@ -463,10 +502,9 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         by_category: Counter[str] = Counter()
 
         progress.start_phase("articles downloaded", [c.source_id for c in selected])
-        tasks = [asyncio.create_task(progress.counted(_fetch_one(fetcher, c), c.source_id)) for c in selected]
+        downloads = as_downloaded([progress.counted(_fetch_one(fetcher, c), c.source_id) for c in selected])
         try:
-            for next_done in asyncio.as_completed(tasks):
-                c, html, ex = await next_done
+            async for c, html, ex in downloads:
                 verdict = await judge.article(c, html, ex, fetcher.failures.get(c.url, "network_error"))
                 c.prefetched = None  # a probed page: no longer needed
                 del html, ex
@@ -479,9 +517,11 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
                     judge.saved_ids.add(verdict.record["id"])
                     saved.append(verdict.record)
                     by_category.update(m["category"] for m in verdict.record["categories"])
+                if len(seen_rows) >= 200 and not opts.dry_run:  # kept if the run is stopped
+                    await storage.mark_seen(seen_rows)
+                    seen_rows = []
         finally:
-            for t in tasks:
-                t.cancel()
+            await downloads.aclose()
         stats["http"] = dict(fetcher.stats)
         log.info("%s", progress.line().replace("progress:", "download done:"))
         if fetcher.stopped_hosts():
