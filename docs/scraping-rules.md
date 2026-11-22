@@ -73,7 +73,10 @@ Each tab (and the print edition) is read page by page, following its "next page"
    24 hours, that is where the last run stopped. Dry runs and `check-sources` never update this file.
 3. **No next page**, or the next page brings no new links.
 4. **Safety caps**: `sections.max_pages` (20) pages per tab and `sections.max_per_source`
-   (60) tabs per outlet.
+   (60) tabs per outlet. **Regional outlets read at most `sections.regional_max_pages` (3)
+   pages per tab**: their new stories sit on a tab's first pages, and deeper pages hold old
+   news (a trace on 2026-11-22 found mkantho paging 11 pages deep and ajkersylhet 15, all
+   old stories).
 
 The very first run has no memory yet, so tabs without dates are read to the page cap.
 
@@ -99,9 +102,13 @@ The very first run has no memory yet, so tabs without dates are read to the page
   article or header, then any `<time>` on the page. Pages with none of these (most local
   outlets) give a date written out next to the headline: in the headline's own block or the
   text right after the `<h1>`, in an element named like a date/meta line
-  ("December 24, 2024", "২৪ ডিসেম্বর ২০২৪", "৫ ঘণ্টা আগে"). The masthead's "today" date,
-  clocks and "updated" stamps are never used. Modified/updated dates are never used, so
-  an old story edited today does not pass, and a site-wide JSON-LD block (its page is the
+  ("December 24, 2024", "২৪ ডিসেম্বর ২০২৪", "৫ ঘণ্টা আগে"), or a numeric day-first date after a
+  "published" label, whatever the element is called ("প্রকাশিত: ২৭/১০/২০২৬", "Published: 27-10-2026").
+  The masthead's "today" date and clocks are never used. An "updated" stamp next to the
+  headline is used only when nothing else is there (some local themes print the only date as
+  "Update Time : ..."). A date guessed by trafilatura that is a bare "today" is dropped (it is
+  the header clock); the article then gets the scrape date. Modified/updated meta tags are
+  never used, so an old story edited today does not pass, and a site-wide JSON-LD block (its page is the
   homepage, or its headline is the outlet name) is ignored. A time without an offset is Dhaka
   time. A full timestamp beats a bare day. When the only date is a bare day (no time, or
   exactly 00:00:00), it is compared by day in Dhaka: a story dated with yesterday's day is

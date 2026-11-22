@@ -329,3 +329,47 @@ def test_extract_visible_date_next_to_headline_not_the_masthead_clock():
     # relative date
     html = f"""<html><body>{head}<h1>শিরোনাম এখানে আছে</h1><span class="time">৩ দিন আগে</span>{_BODY}</body></html>"""
     assert extract(html, "https://example.com/2", now).published_at.date().isoformat() == "2026-11-18"
+
+
+def test_extract_local_news_templates_give_the_story_date_not_today():
+    """Regional sites seen on 2026-11-22: without these, every old story read as today and
+    tab paging never stopped."""
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 22, 20, 56, tzinfo=ZoneInfo("Asia/Dhaka"))
+    clock = '<div class="container"><div class="date">8:56 pm, Sunday, 22 November 2026</div></div>'
+    # mkantho (WordPress "itpolly" theme): the only date is labelled "Update Time"
+    html = f"""<html><body>{clock}<div class="single-white2"><h1>পল্লবীতে পুলিশের গাড়িতে আগুন</h1>
+    <div class="update-time"><ul><li>Update Time :
+    08:10:35 am, Sunday, 1 November 2026</li></ul></div>{_BODY}</div></body></html>"""
+    ex = extract(html, "https://mkantho.com/x/", now)
+    assert ex.published_at.date().isoformat() == "2026-11-01" and ex.date_only
+    # ajkersylhet: numeric day/month/year after a "published" label, in Bangla digits
+    clock = '<div class="top_ber"><div class="top_ber_left" id="get_date">রবিবার, ২২ নভেম্বর ২০২৬</div></div>'
+    html = f"""<html><body>{clock}<div class="row"><h1>ডেঙ্গু ও হামে মৃত্যু নেই ২৪ ঘণ্টায়</h1>
+    <div class="col-sm-8"><div class="pDate"><p>প্রকাশিত: ২৭/১০/২০২৬ ০৩:০৩:১২ অপরাহ্ন</p></div></div>
+    {_BODY}</div></body></html>"""
+    assert extract(html, "https://ajkersylhet.com/news-details?nid=1", now).published_at.date().isoformat() == "2026-10-27"
+    html = f"""<html><body><h1>Headline of the story</h1><p>Published: 05-11-2026</p>{_BODY}</body></html>"""
+    assert extract(html, "https://example.com/3", now).published_at.date().isoformat() == "2026-11-05"
+
+
+def test_extract_a_real_date_beats_an_update_stamp():
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 22, 20, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    html = f"""<html><body><h1>শিরোনাম এখানে আছে</h1><span class="post-date">১০ নভেম্বর ২০২৬</span>
+    <span class="updated">আপডেট: ২২ নভেম্বর ২০২৬</span>{_BODY}</body></html>"""
+    assert extract(html, "https://example.com/4", now).published_at.date().isoformat() == "2026-11-10"
+
+
+def test_extract_drops_a_guessed_bare_today():
+    """trafilatura's guess on a page whose only date is the header clock: no date, not today."""
+    from zoneinfo import ZoneInfo
+    from avn_scraper.scraper import extract as X
+    from selectolax.lexbor import LexborHTMLParser
+    now = datetime(2026, 11, 22, 20, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    tree = LexborHTMLParser("<html><body><h1>no date here at all</h1></body></html>")
+    assert X._published(tree, [], "2026-11-22", now) == (None, False)
+    dt, bare = X._published(tree, [], "2026-11-20", now)
+    assert dt.date().isoformat() == "2026-11-20" and bare
+    dt, bare = X._published(tree, [], "2026-11-22T09:15:00+06:00", now)
+    assert dt.hour == 9 and not bare

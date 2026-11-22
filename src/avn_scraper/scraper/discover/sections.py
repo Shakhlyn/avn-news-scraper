@@ -266,6 +266,8 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
     settings = settings or {}
     limit = int(settings.get("max_per_source", 60))
     max_pages = int(settings.get("max_pages", 20))
+    if source.type == "regional":  # new local stories sit on a tab's first pages; deeper ones are old
+        max_pages = min(max_pages, int(settings.get("regional_max_pages", 3)))
     probe = int(settings.get("date_probe", 3)) if source.type == "regional" else 0
     # Links on the homepage are left out of the probe: "latest" / "most read" widgets repeat
     # them on every page, so they say nothing about where a tab's list has got to.

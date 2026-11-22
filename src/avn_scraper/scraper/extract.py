@@ -57,6 +57,14 @@ _AGO = re.compile(r"(?<!\d)(\d{1,4})\s*(মিনিট|ঘণ্টা|ঘন�
 _AGO_UNITS = {"মিনিট": "m", "ঘণ্টা": "h", "ঘন্টা": "h", "দিন": "d", "সপ্তাহ": "w", "মাস": "mo", "বছর": "y"}
 _META_ATTR = re.compile(r"date|time|meta|publish|posted|byline|entry-?info|post-?info", re.I)
 _NOT_META_ATTR = re.compile(r"today|now|current|clock|update|modif|weather|top[-_]?bar|site[-_]?header|ticker|masthead", re.I)
+# The same, minus "update": the last-resort pass. Some local-news WordPress themes (mkantho's)
+# print the only date as "Update Time : 08:10 am, Sunday, 1 November 2026".
+_NOT_META_ATTR_LAST = re.compile(r"today|now|current|clock|modif|weather|top[-_]?bar|site[-_]?header|ticker|masthead", re.I)
+# A labelled publish line ("প্রকাশিত: ২৭/১০/২০২৬", "Published: 27-10-2026") is the article's
+# own date whatever its element is called. Numeric dates are day first, as Bangladeshi sites write them.
+_PUBLISH_LABEL = r"(?:প্রকাশিত|প্রকাশের\s*সময়|প্রকাশকাল|প্রকাশ|published(?:\s*(?:on|at|date|time))?|posted(?:\s*on)?|publish\s*(?:date|time))"
+_LABELED = re.compile(rf"{_PUBLISH_LABEL}\s*[:：]?", re.I)
+_LABELED_NUMERIC = re.compile(rf"{_PUBLISH_LABEL}\s*[:：]?\s*(?:[^\d\s]+\s*,?\s*)?(\d{{1,2}})[/.\-](\d{{1,2}})[/.\-](\d{{4}})", re.I)
 
 
 @dataclass
@@ -181,6 +189,8 @@ def _text_to_day(text: str, now: datetime) -> datetime | None:
         day, month, year = int(m[1]), _MONTHS[m[2].lower()], int(m[3])
     elif m := _MONTH_DAY_YEAR.search(text):
         day, month, year = int(m[2]), _MONTHS[m[1].lower()], int(m[3])
+    elif m := _LABELED_NUMERIC.search(text):
+        day, month, year = int(m[1]), int(m[2]), int(m[3])
     elif m := _AGO.search(text):
         when = _ago(int(m[1]), m[2], now).astimezone(_DHAKA)
         day, month, year = when.day, when.month, when.year
@@ -193,13 +203,14 @@ def _text_to_day(text: str, now: datetime) -> datetime | None:
     return dt if 2000 <= year and dt <= now + timedelta(days=1) else None
 
 
-def _meta_like(node, depth: int = 3) -> bool:
+def _meta_like(node, depth: int = 3, last_resort: bool = False) -> bool:
     """The element (or a close parent) is named like a date / meta line, and none of them
-    like a clock or an "updated" stamp."""
+    like a clock or (except on the last-resort pass) an "updated" stamp."""
     meta = False
+    reject = _NOT_META_ATTR_LAST if last_resort else _NOT_META_ATTR
     while node is not None and depth >= 0:
         names = f"{node.attributes.get('class') or ''} {node.attributes.get('id') or ''}"
-        if _NOT_META_ATTR.search(names):
+        if reject.search(names):
             return False
         meta = meta or bool(_META_ATTR.search(names))
         node, depth = node.parent, depth - 1
@@ -210,13 +221,15 @@ _NEAR_HEADLINE_CHARS = 1500
 _MAX_META_CHARS = 300  # a meta line is short; longer text is body copy, and capping it keeps the regexes cheap
 
 
-def _date_in(node, now: datetime) -> datetime | None:
+def _date_in(node, now: datetime, last_resort: bool = False) -> datetime | None:
     if node.tag in ("script", "style", "-text"):
         return None
     own = node.text(deep=False)
     if not own or not own.strip() or len(own) > _MAX_META_CHARS:
         return None
-    return _text_to_day(own, now) if _meta_like(node) else None
+    if _LABELED.search(normalize_unicode(own)) or _meta_like(node, last_resort=last_resort):
+        return _text_to_day(own, now)
+    return None
 
 
 def _text_date(tree: HTMLParser, now: datetime) -> datetime | None:
@@ -230,10 +243,19 @@ def _text_date(tree: HTMLParser, now: datetime) -> datetime | None:
     if not h1s:
         return None
     headline = max(h1s, key=lambda h: len(h.text()))
+    # An "updated" stamp only when nothing else is near the headline: it is never earlier than
+    # the publish date, so at worst an old story edited later looks newer.
+    for last_resort in (False, True):
+        if (dt := _near_headline(tree, headline, now, last_resort)) is not None:
+            return dt
+    return None
+
+
+def _near_headline(tree: HTMLParser, headline, now: datetime, last_resort: bool) -> datetime | None:
     block, level = headline.parent, 0
     while block is not None and block.tag not in ("body", "html") and level < 2:
         for node in block.traverse():
-            if (dt := _date_in(node, now)) is not None:
+            if (dt := _date_in(node, now, last_resort)) is not None:
                 return dt
         block, level = block.parent, level + 1
     root = tree.body or tree.root
@@ -244,7 +266,7 @@ def _text_date(tree: HTMLParser, now: datetime) -> datetime | None:
             continue
         if not after:
             continue
-        if (dt := _date_in(node, now)) is not None:
+        if (dt := _date_in(node, now, last_resort)) is not None:
             return dt
         own = node.text(deep=False) if node.tag not in ("script", "style") else ""
         chars += len(own.strip()) if own else 0
@@ -273,10 +295,16 @@ def _published(tree: HTMLParser, ld: list[dict], fallback: str | None,
     raw = time_node.attributes.get("datetime") if time_node is not None else None
     if (dt := _parse_dt(raw)) is not None:
         return dt, _bare_day(raw, dt)
-    if (dt := _text_date(tree, now or datetime.now(_DHAKA))) is not None:
+    now = now or datetime.now(_DHAKA)
+    if (dt := _text_date(tree, now)) is not None:
         return dt, True
     if (dt := _parse_dt(fallback)) is not None:
-        return dt, _bare_day(fallback, dt)
+        bare = _bare_day(fallback, dt)
+        # A bare "today" from the guess is almost always the header clock, which would make every
+        # old story look new. No date is safer: a saved article falls back to the scrape date.
+        if bare and dt.astimezone(_DHAKA).date() == now.astimezone(_DHAKA).date():
+            return None, False
+        return dt, bare
     return None, False
 
 

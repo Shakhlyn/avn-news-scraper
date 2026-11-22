@@ -140,3 +140,27 @@ def test_regional_budget_stops_tab_paging_and_keeps_what_was_found():
 def test_national_papers_have_no_budget():
     pages_read, counts = _budget_run("national", 1e-9)
     assert pages_read == 2 and "section_budget_hit" not in counts
+
+
+def test_regional_tabs_read_at_most_regional_max_pages():
+    pages = {f"/local?page={n}": _listing(list(range(n * 10, n * 10 + 5)), f"/local?page={n + 1}")
+             for n in range(2, 10)}
+    pages["/local"] = _listing([1, 2, 3, 4, 5], "/local?page=2")
+    requests: Counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = request.url.raw_path.decode()
+        requests[key] += 1
+        return httpx.Response(200, stream=_Stream(pages.get(key, "").encode()), headers={"Content-Type": "text/html"})
+
+    async def go(kind):
+        source = Source(id="local", name="Local", language="bn", type=kind, homepage=SITE + "/")
+        async with Fetcher({"respect_robots": False, "per_host_delay": 0, "retries": 0},
+                           transport=httpx.MockTransport(handler)) as f:
+            return await discover_sections(f, source, HOME, NOW - timedelta(hours=24),
+                                           {"date_probe": 0, "regional_max_pages": 3}, None)
+
+    _, _, read = asyncio.run(go("regional"))
+    assert read == 3
+    _, _, read = asyncio.run(go("national"))
+    assert read > 3

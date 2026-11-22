@@ -73,6 +73,7 @@ sections:
   auto_discover: true
   max_per_source: 60   # safety cap on tabs per outlet
   max_pages: 20        # safety cap on pages per tab
+  regional_max_pages: 3  # regional papers: new stories sit on a tab's first pages
   # Time budget per regional (local/district) paper for reading its tabs' pages, in minutes.
   # Past it no new tab page is read and what was found is kept; its feeds, sitemaps and article
   # downloads still run. Some regional papers have dozens of undated tabs, which the caps above
