@@ -274,3 +274,29 @@ def test_timeout_inside_a_run_is_not_reported_as_too_long(monkeypatch, cfg):
     monkeypatch.setattr(pipeline, "_run", failing_run)
     with pytest.raises(TimeoutError, match="something else"):
         asyncio.run(run_pipeline(cfg, RunOptions()))
+
+
+@pytest.mark.anyio
+async def test_articles_are_judged_as_they_download_not_all_at_the_end(tmp_path, cfg, database, monkeypatch):
+    """Pages must not pile up in memory: the first article is judged before the last download ends."""
+    from avn_scraper.scraper import pipeline
+    events: list[str] = []
+    real_fetch, real_article = pipeline._fetch_one, pipeline.Judge.article
+    order: dict[str, int] = {}
+
+    async def slow_fetch(fetcher, c):
+        n = order.setdefault(c.url, len(order))
+        await asyncio.sleep(0.1 * n)  # later articles take longer to download
+        out = await real_fetch(fetcher, c)
+        events.append("downloaded")
+        return out
+
+    async def article(self, c, html, ex, reason):
+        events.append("judged")
+        return await real_article(self, c, html, ex, reason)
+
+    monkeypatch.setattr(pipeline, "_fetch_one", slow_fetch)
+    monkeypatch.setattr(pipeline.Judge, "article", article)
+    result = await run_pipeline(make_config(tmp_path, cfg.keywords), RunOptions(), transport=make_site(Counter()))
+    assert events.count("downloaded") >= 3 and result.stats["outcome"]
+    assert events.index("judged") < len(events) - 1 - events[::-1].index("downloaded")

@@ -450,9 +450,38 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
             log.warning("Per-outlet cap left out %d articles: %s", sum(capped.values()), capped)
         log.info("%d candidates, %d new, %d selected for download", len(merged), stats["new_candidates"], len(selected))
 
-        # 3. fetch & extract
+        # 3-4. fetch, extract, classify, store. Each article is judged and saved as soon as it is
+        # downloaded and its page then dropped, so memory stays flat however many articles a run
+        # has (keeping every page until the end took 20 GB on a 57,000-article run). Downloads run
+        # in parallel; judging and saving go one at a time on the single database connection.
+        judge = Judge(classifier=classifier, storage=storage, tz=tz, run_id=run_id, by_id=by_id,
+                      recent=await storage.recent_titles(days=3), window_from=cutoff)
+        saved: list[dict[str, Any]] = []
+        seen_rows: list[tuple[str, str, str]] = []
+        outcome: Counter[str] = Counter()
+        failed: list[dict[str, str]] = []
+        by_category: Counter[str] = Counter()
+
         progress.start_phase("articles downloaded", [c.source_id for c in selected])
-        fetched = await asyncio.gather(*(progress.counted(_fetch_one(fetcher, c), c.source_id) for c in selected))
+        tasks = [asyncio.create_task(progress.counted(_fetch_one(fetcher, c), c.source_id)) for c in selected]
+        try:
+            for next_done in asyncio.as_completed(tasks):
+                c, html, ex = await next_done
+                verdict = await judge.article(c, html, ex, fetcher.failures.get(c.url, "network_error"))
+                c.prefetched = None  # a probed page: no longer needed
+                del html, ex
+                seen_rows += verdict.seen
+                if verdict.failed:
+                    failed.append(verdict.failed)
+                if verdict.record is None:
+                    outcome[verdict.outcome] += 1
+                elif await _save(storage, verdict, opts.dry_run, outcome):
+                    judge.saved_ids.add(verdict.record["id"])
+                    saved.append(verdict.record)
+                    by_category.update(m["category"] for m in verdict.record["categories"])
+        finally:
+            for t in tasks:
+                t.cancel()
         stats["http"] = dict(fetcher.stats)
         log.info("%s", progress.line().replace("progress:", "download done:"))
         if fetcher.stopped_hosts():
@@ -461,30 +490,6 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         troubled = {h: t for h, t in block_log.summary().items() if t["blocks"] or t["errors"] or t["stopped"]}
         if troubled:
             stats["blocks"] = troubled
-        failures = dict(fetcher.failures)
-
-    # 4. classify, cluster, store
-    judge = Judge(classifier=classifier, storage=storage, tz=tz, run_id=run_id, by_id=by_id,
-                  recent=await storage.recent_titles(days=3), window_from=cutoff)
-    saved: list[dict[str, Any]] = []
-    seen_rows: list[tuple[str, str, str]] = []
-    outcome: Counter[str] = Counter()
-    failed: list[dict[str, str]] = []
-    by_category: Counter[str] = Counter()
-
-    for c, html, ex in fetched:
-        verdict = await judge.article(c, html, ex, failures.get(c.url, "network_error"))
-        seen_rows += verdict.seen
-        if verdict.failed:
-            failed.append(verdict.failed)
-        if verdict.record is None:
-            outcome[verdict.outcome] += 1
-            continue
-        if not await _save(storage, verdict, opts.dry_run, outcome):
-            continue
-        judge.saved_ids.add(verdict.record["id"])
-        saved.append(verdict.record)
-        by_category.update(m["category"] for m in verdict.record["categories"])
 
     if not opts.dry_run:
         await storage.mark_seen(seen_rows)
