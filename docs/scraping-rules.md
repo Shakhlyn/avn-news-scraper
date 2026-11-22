@@ -12,8 +12,10 @@ and outlets in `config/sources.yaml`.
   The 6 hours that overlap the previous run catch stories it missed (published late, or
   listed late). Links the previous run already stored or judged (`seen_urls`) are skipped,
   so the overlap downloads nothing twice and news is not repeated across days.
-- If a day was missed (PC off, run failed), catch up with `avn run --since 54`, or with
-  24 × the number of days missed + 6.
+- **Every run covers only this window**: the daily scrape, a catch-up after the PC was off,
+  `./scrape-now.sh` and the API's "scrape now". A missed day is not filled in by the next run.
+  For that, run `avn backfill` (older news is only scraped on request), or `avn run --since 54`
+  by hand (24 × the days missed + 6).
 - Older news (past months, years) is scraped on demand with `avn backfill` (see below).
 - An article is stored once. Links that were downloaded and didn't match are remembered
   and not downloaded again.
@@ -234,7 +236,7 @@ avn backfill --status                 # what is done, partial, left to retry
 - **Next to the daily run:** a backfill has its own lock (`data/.backfill.lock`, one at a time).
   While the daily scrape or `avn run` holds the run lock it pauses, so the two never hit a
   site together. Backfill runs are saved in `runs` with `stats.backfill`, and never count as
-  the daily run (the scheduler and `--since-last-run` ignore them).
+  the daily run (the scheduler ignores them).
 - **Outlets without dates are skipped:** many local outlets' sitemaps list articles with no
   `lastmod` and no date in the file name, so no month can be picked. After the first such
   file the rest of the series is not read, and the outlet is `no_archive` (layout `undated`).

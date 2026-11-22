@@ -46,7 +46,7 @@ class ScrapeManager:
         self.state = {"running": True, "trigger": trigger,
                       "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                       "finished_at": None, "ok": None, "error": None, "outcome": None}
-        self._task = asyncio.create_task(self._work(opts or RunOptions(since_last_run=True)), name="scrape")
+        self._task = asyncio.create_task(self._work(opts or RunOptions()), name="scrape")
         return True
 
     async def stop(self) -> None:

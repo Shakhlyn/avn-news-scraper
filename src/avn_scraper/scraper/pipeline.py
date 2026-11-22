@@ -120,7 +120,6 @@ class Progress:
 @dataclass
 class RunOptions:
     since_hours: float | None = None
-    since_last_run: bool = False  # look back to the last full run, at least window_hours
     dry_run: bool = False
     prefilter: bool | None = None  # None = settings.yaml `prefilter`
     only_sources: list[str] | None = None
@@ -224,13 +223,6 @@ async def _fetch_one(fetcher: Fetcher, c: Candidate) -> tuple[Candidate, str | N
         fetcher.failures[c.url] = "extract_error"
         return c, html, None
     return c, html, ex
-
-
-def lookback_hours(window: float, last_run: datetime | None, now: datetime) -> float:
-    """Hours back to `last_run`, never fewer than `window`."""
-    if last_run is None:
-        return window
-    return max(window, (now - last_run).total_seconds() / 3600)
 
 
 @dataclass
@@ -371,8 +363,7 @@ async def run_pipeline(cfg: Config, opts: RunOptions,
     except TimeoutError:
         if not deadline.expired():
             raise
-        # Articles saved so far stay. No run record is written, so the next
-        # --since-last-run run looks back to the last run that finished.
+        # Articles saved so far stay. No run record is written.
         raise RunTooLong(f"the scrape ran past max_run_minutes ({limit:g} min) and was stopped") from None
     finally:
         await storage.close()
@@ -384,9 +375,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
     tz = ZoneInfo(cfg.timezone)
     started = datetime.now(timezone.utc)
     run_id = started.strftime("%Y%m%dT%H%M%SZ")
+    # Always the day's window (or --since): older news only through `avn backfill`.
     hours = opts.since_hours or float(s.get("window_hours", 30))
-    if opts.since_last_run:
-        hours = lookback_hours(hours, await storage.last_full_run(), started)
     cutoff = started - timedelta(hours=hours)
     classifier = await asyncio.to_thread(Classifier, cfg.keywords)
     if not opts.dry_run:

@@ -283,7 +283,7 @@ def test_scrape_runs_once_at_a_time_and_reports(config, database, monkeypatch):
     release, entered = threading.Event(), threading.Event()
 
     async def slow(cfg, opts):
-        assert opts.since_last_run
+        assert opts.since_hours is None  # the window, never further back
         entered.set()
         while not release.is_set():
             await asyncio.sleep(0.01)

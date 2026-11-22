@@ -14,7 +14,7 @@ router = APIRouter(prefix="/scrape", tags=["scraper"])
              dependencies=[Depends(require_reviewing), Depends(same_origin)])
 @limiter.limit(SCRAPE_LIMIT)
 async def start_scrape(request: Request, scrapes: Scrapes):
-    """Scrape now, looking back to the last full run. Follow it on GET /scrape."""
+    """Scrape now, looking back window_hours (30). Follow it on GET /scrape."""
     if not scrapes.start("manual"):
         raise HTTPException(409, "A scrape is already running.")
     return scrapes.state

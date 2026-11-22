@@ -9,7 +9,7 @@ import pytest
 from avn_scraper.core.database import fetch_all, fetch_one
 from avn_scraper.scraper.config import Config
 from avn_scraper.scraper.importer import import_sqlite
-from avn_scraper.scraper.pipeline import RunOptions, _run, lookback_hours, run_pipeline
+from avn_scraper.scraper.pipeline import RunOptions, _run, run_pipeline
 from avn_scraper.scraper.storage import DatabaseUnavailable, PostgresStorage, connect, migrate
 
 pytestmark = pytest.mark.anyio
@@ -149,11 +149,6 @@ async def test_dry_run_writes_nothing(tmp_path, cfg, database):
     await conn.close()
 
 
-@pytest.mark.parametrize("gap,expected", [(None, 24), (timedelta(hours=3), 24), (timedelta(days=3), 72)])
-def test_lookback_reaches_the_last_run_and_never_less_than_the_window(gap, expected):
-    assert lookback_hours(24, NOW - gap if gap else None, NOW) == expected
-
-
 async def test_last_full_run_skips_partial_runs(storage):
     assert await storage.last_full_run() is None
     await storage.save_run("full", NOW.isoformat(), NOW.isoformat(), {})
@@ -162,14 +157,16 @@ async def test_last_full_run_skips_partial_runs(storage):
     assert await storage.last_full_run() == NOW
 
 
-async def test_since_last_run_widens_the_cutoff(tmp_path, cfg, storage):
+async def test_a_run_looks_back_only_the_window_even_after_days_off(tmp_path, cfg, storage):
+    """Older news is for `avn backfill`; a run after days off still covers window_hours."""
     import test_pipeline as tp
     start = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     await storage.save_run("old", start, start, {})
     config = tp.make_config(tmp_path, cfg.keywords)
-    result = await _run(config, RunOptions(since_last_run=True), storage, tp.make_site(tp.Counter()))
+    result = await _run(config, RunOptions(), storage, tp.make_site(tp.Counter()))
+    hours = float(config.settings.get("window_hours", 30))
     cutoff = datetime.fromisoformat(result.stats["cutoff"])
-    assert timedelta(hours=71) < datetime.now(timezone.utc) - cutoff < timedelta(hours=73)
+    assert abs((datetime.now(timezone.utc) - cutoff) - timedelta(hours=hours)) < timedelta(minutes=5)
 
 
 def make_sqlite(path):

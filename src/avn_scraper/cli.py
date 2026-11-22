@@ -59,7 +59,6 @@ def _split(value: Optional[str]) -> Optional[list[str]]:
 @app.command()
 def run(
     since: Optional[float] = typer.Option(None, help="Look back this many hours (default: settings window_hours)"),
-    since_last_run: bool = typer.Option(False, "--since-last-run", help="Look back to the last full run, at least window_hours"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Do everything except saving; print matches"),
     sources: Optional[str] = typer.Option(None, help="Comma separated source ids to limit the run"),
     prefilter: Optional[bool] = typer.Option(None, "--prefilter/--no-prefilter",
@@ -72,10 +71,7 @@ def run(
     """Scrape, classify and store today's relevant news."""
     _setup_logging(verbose)
     cfg = load_config(config)
-    if since is not None and since_last_run:
-        console.print("[red]Use --since or --since-last-run, not both.[/]")
-        raise typer.Exit(2)
-    opts = RunOptions(since_hours=since, since_last_run=since_last_run, dry_run=dry_run, prefilter=prefilter,
+    opts = RunOptions(since_hours=since, dry_run=dry_run, prefilter=prefilter,
                       only_sources=_split(sources), catchall=catchall)
     try:
         with run_lock(cfg.data_dir / ".run.lock"):

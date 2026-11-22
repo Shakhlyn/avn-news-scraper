@@ -84,15 +84,15 @@ instead of `.venv/bin/avn`.
 It starts the database if needed, then runs the web API on `http://127.0.0.1:8100` and
 scrapes every night at 23:30. Each scrape looks back 30 hours. The 6 hours that overlap
 the previous night catch late stories, and anything already saved is skipped. If the PC
-was off at 23:30, it scrapes as soon as you start it, and looks back to the last
-finished scrape.
+was off at 23:30, it scrapes as soon as you start it, still looking back 30 hours: days the
+PC was off are not filled in. Older news is only scraped with `avn backfill`.
 
 Nothing starts it for you: no cron, no system service. You start it yourself.
 
 **Scrape right now**, without the service:
 
 ```bash
-./scrape-now.sh                        # looks back to the last finished scrape
+./scrape-now.sh                        # looks back 30 hours, like the daily scrape
 avn run --dry-run                      # try it: shows what would be saved, saves nothing
 ```
 
