@@ -108,6 +108,9 @@ The very first run has no memory yet, so tabs without dates are read to the page
   backfill. Only the section part of the URL counts (`/national/sports-minister-...` is kept),
   and `ict` is not skipped (International Crimes Tribunal). Of 1,337 saved articles, the 7 from
   such sections were all false matches. A run counts them as `off_topic_skipped`.
+- **Sections that are not news** are skipped the same way (`NOT_NEWS_SECTIONS` in `urls.py`):
+  BSS's `/notice_info/` (official notices, "NOC-10066 (Mr.Md. Abdul Jabber)"). Counted as
+  `off_topic_skipped` too.
 - **World news only when it is about Bangladesh**: links in world-news sections
   (`international`, `world`, `foreign`, `inter-country`, regions like `asia`, `middle-east`;
   `INTERNATIONAL_SECTIONS` in `urls.py`) are downloaded only when their headline, summary or URL

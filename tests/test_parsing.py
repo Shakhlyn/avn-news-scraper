@@ -540,6 +540,15 @@ def test_off_topic_sections_are_skipped_but_not_look_alikes():
     assert not any(off_topic_section(u) for u in kept)
 
 
+def test_bss_notice_pages_are_not_news():
+    """332 BSS /notice_info/ pages (official notices) were saved as articles on 2026-11-23."""
+    from avn_scraper.scraper.urls import off_topic_section
+    assert off_topic_section("https://www.bssnews.net/notice_info/357")
+    assert off_topic_section("https://www.bssnews.net/notice_info/183/")
+    assert not off_topic_section("https://www.bssnews.net/news/356")
+    assert not off_topic_section("https://www.bssnews.net/notice_info-of-hasina-verdict")  # one segment: an article
+
+
 def test_off_topic_tabs_are_not_scanned():
     from avn_scraper.scraper.discover.sections import find_section_links
     html = """<html><body><nav class="menu"><ul>

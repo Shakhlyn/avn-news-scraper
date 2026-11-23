@@ -156,6 +156,16 @@ The guiding priorities, in order, when two rules pull against each other:
   sirajganjprotidin, ~2,500-2,800 each on 2026-11-23) are real old articles, remembered
   after the first full run.
 
+### 2.9 Sections that are not news are skipped (BSS notices)
+
+- **Rule:** `NOT_NEWS_SECTIONS` (`notice_info`) is checked with the off-topic sections (2.5):
+  those links are not downloaded, in the daily run and the backfill, and such tabs not scanned.
+- **Why / problem before:** on 2026-11-23, **332 of bss's 342 saved articles** were
+  `/notice_info/` pages, official notices titled with the agency's name (page title
+  "Bangladesh Sangbad Sangstha (BSS)", headline like "NOC-10066 (Mr.Md. Abdul Jabber)"), with no
+  date, so they reached the dashboard as today's human-rights news.
+- **Cost:** none; notices are not news.
+
 ---
 
 ## 3. How far each tab is read (pagination)
@@ -642,6 +652,7 @@ either a lost story (read as too old) or old news shown as new.
 
 ## Timeline of changed decisions
 | 2026-11-23 | Menu/footer tab links downloaded as articles | Dropped before probes and download | 2.4, 2.8 |
+| 2026-11-23 | BSS `/notice_info/` notices downloaded and saved as news | Skipped as not news | 2.5, 2.9 |
 
 | Date | From | To | Section |
 |---|---|---|---|
@@ -663,4 +674,5 @@ either a lost story (read as too old) or old news shown as new.
 | 2026-11-23 | Backfill 2 s for every site, 3 blocks in a row | 1 s for four clean sites, 2 blocks in the run | 9.3, 9.8 |
 | 2026-11-23 | One download task per link, all started at once | 256 workers, links in turns by site; at most 384 pages in memory | 8.4, 8.8 |
 | 2026-11-23 | Menu/footer tab links downloaded as articles | Dropped before probes and download | 2.4, 2.8 |
+| 2026-11-23 | BSS `/notice_info/` notices downloaded and saved as news | Skipped as not news | 2.5, 2.9 |
 | 2026-11-23 | Any `<time>` in the `<article>`; written date only near the longest `<h1>`; ISO date fields; guess before URL | Title-matched headline, `<time>`s near it outside cards, Bangla/English written dates, URL day, guess checked | 5.1, 5.6, 5.8 |

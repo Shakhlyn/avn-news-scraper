@@ -55,9 +55,14 @@ OFF_TOPIC_SECTIONS = frozenset({
 })
 
 
+# Sections that are not news at all: BSS's /notice_info/ (official notices such as
+# "NOC-10066 (Mr.Md. Abdul Jabber)"), 332 of which were saved as articles on 2026-11-23.
+NOT_NEWS_SECTIONS = frozenset({"notice_info"})
+
+
 def off_topic_segment(segment: str) -> bool:
     s = segment.lower()
-    return s in OFF_TOPIC_SECTIONS or s.split("-")[0] in OFF_TOPIC_SECTIONS
+    return s in OFF_TOPIC_SECTIONS or s.split("-")[0] in OFF_TOPIC_SECTIONS or s in NOT_NEWS_SECTIONS
 
 
 def off_topic_section(url: str) -> bool:
