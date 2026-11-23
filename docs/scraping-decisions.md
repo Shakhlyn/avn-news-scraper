@@ -404,6 +404,8 @@ either a lost story (read as too old) or old news shown as new.
   task's result (the whole page). Now memory stays flat (four outlets, 882 downloads: 0.59 GB
   peak), saved articles appear during the run, and a stopped run doesn't re-download.
 - **Evidence:** 98ac681, b24fbae.
+- **Changed 2026-11-23 (8.8):** a fixed pool of download workers instead of one task per link,
+  because finished pages still piled up when judging was slower than downloading.
 
 ### 8.5 A progress line every 60 s
 
@@ -437,9 +439,28 @@ either a lost story (read as too old) or old news shown as new.
 - **Not the whole story:** the 2026-11-23 14:01 daily run (first full run without the
   pre-filter, 100 min, 26,169 too-old downloads) held **12.3 GB**, 10.9 GB of it in the main
   heap. Probe pages scale to about 0.5 GB for all regional outlets, and the small profile
-  doesn't reproduce the growth, so the rest is something that grows with run size. Still
-  open (ticket-038).
+  doesn't reproduce the growth, so the rest is something that grows with run size. Found
+  and fixed in 8.8.
 - **Cost:** none; the same pages are downloaded and reused.
+
+### 8.8 A fixed pool of download workers, links taken one site at a time
+
+- **Rule:** `as_downloaded` runs 256 workers that take the links in order and hand each page to a
+  queue of 128; the link list is first put in turns by site (`by_host_turns`: A1 B1 C1 A2 B2 ...).
+  At most 256 + 128 pages are in memory. Daily run and backfill.
+- **Why / problem before:** 8.4 started one task per link, all at once, with a bounded queue.
+  A task that finished while the queue was full kept its page and waited for room, so when
+  judging (one at a time, ~0.065 s each, ~15/s) was slower than downloading (~20/s), finished
+  pages piled up in waiting tasks. Small runs never showed it (judging kept up). Full dry run,
+  every link treated as new (42,894 downloads): **2,588 pages waiting at 14 min, memory 2.2 GB
+  and rising ~200 MB/min**; the 2026-11-23 14:01 daily run reached **12.3 GB**. Stopped there.
+- **After the fix**, same full dry run (42,992 downloads): memory **flat at 1.42 GB** from minute
+  27 to the end (peak 1.43 GB; 845 MB after `malloc_trim`), 110.8 min. Judging rate in the first
+  16 min rose from ~15 to ~21 articles/s: workers spread over many sites instead of queueing on
+  one site's delay. The run's length is set by its biggest sites (dainikcoxsbazar 2,858,
+  inqilab 2,820, sirajganjprotidin 2,539 requests at 1-1.5 s each), mostly too-old links.
+- **Cost:** none seen. A site's pace is unchanged; workers only limit how many pages wait.
+- **Evidence:** ticket-038.
 
 ## 9. Backfill (past months and days)
 
@@ -579,3 +600,4 @@ either a lost story (read as too old) or old news shown as new.
 | 2026-11-22 | Download all, then judge | Judge and save per download | 8.4 |
 | 2026-11-23 | Probed pages kept until the run ends | Kept only for links that will be downloaded | 3.2, 8.7 |
 | 2026-11-23 | Backfill 2 s for every site, 3 blocks in a row | 1 s for four clean sites, 2 blocks in the run | 9.3, 9.8 |
+| 2026-11-23 | One download task per link, all started at once | 256 workers, links in turns by site; at most 384 pages in memory | 8.4, 8.8 |

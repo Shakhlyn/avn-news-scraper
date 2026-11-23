@@ -342,3 +342,68 @@ def test_as_downloaded_passes_errors_on():
 
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(go())
+
+
+def test_as_downloaded_holds_at_most_workers_plus_buffer_when_judging_is_slow():
+    """Downloads faster than the caller must wait, not pile up finished pages (12 GB full run)."""
+    import gc
+    import weakref
+    from avn_scraper.scraper.pipeline import as_downloaded
+
+    class Page:
+        pass
+
+    alive: list[weakref.ref] = []
+    peak = 0
+
+    async def fetch():
+        page = Page()
+        alive.append(weakref.ref(page))
+        return page
+
+    async def go():
+        nonlocal peak
+        n = 0
+        async for page in as_downloaded([fetch() for _ in range(500)], buffer=5, workers=10):
+            del page
+            n += 1
+            await asyncio.sleep(0.001)  # the slow judge: every download is already done
+            gc.collect()
+            peak = max(peak, sum(r() is not None for r in alive))
+        return n
+
+    assert asyncio.run(go()) == 500
+    assert peak <= 5 + 10 + 1
+
+
+def test_as_downloaded_stopped_early_closes_downloads_never_started():
+    import warnings
+    from avn_scraper.scraper.pipeline import as_downloaded
+
+    started = []
+
+    async def fetch(n):
+        started.append(n)
+        return n
+
+    async def go():
+        downloads = as_downloaded([fetch(n) for n in range(100)], buffer=2, workers=2)
+        async for n in downloads:
+            if n == 3:
+                break
+        await downloads.aclose()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # "coroutine ... was never awaited" fails the test
+        asyncio.run(go())
+    assert len(started) < 100
+
+
+def test_by_host_turns_takes_one_link_per_site_in_turn():
+    from avn_scraper.scraper.discover import Candidate
+    from avn_scraper.scraper.pipeline import by_host_turns
+
+    urls = [f"https://a.com/{i}" for i in range(3)] + ["https://www.b.com/1"] + [f"https://c.com/{i}" for i in range(2)]
+    out = [c.url for c in by_host_turns([Candidate(url=u, source_id="x") for u in urls])]
+    assert out == ["https://a.com/0", "https://www.b.com/1", "https://c.com/0",
+                   "https://a.com/1", "https://c.com/1", "https://a.com/2"]

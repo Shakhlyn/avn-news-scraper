@@ -253,36 +253,83 @@ class Verdict:
     failed: dict[str, str] | None = None
 
 
-async def as_downloaded(fetches: list[Awaitable[T]], buffer: int = 256) -> AsyncIterator[T]:
-    """Results of `fetches` (all started at once) in the order they finish.
+def by_host_turns(candidates: list[Candidate]) -> list[Candidate]:
+    """The same links, one site at a time in turn (a1 b1 c1 a2 b2 a3 ...), so a limited number of
+    download workers is spread over many sites instead of waiting in line on one site's delay."""
+    queues: dict[str, list[Candidate]] = {}
+    for c in candidates:
+        queues.setdefault(host_of(c.url), []).append(c)
+    lines = [iter(q) for q in queues.values()]
+    out: list[Candidate] = []
+    while lines:
+        still = []
+        for it in lines:
+            c = next(it, None)
+            if c is not None:
+                out.append(c)
+                still.append(it)
+        lines = still
+    return out
 
-    A finished task hands its result to a queue and keeps none itself, so a downloaded page lives
-    only until the caller is done with it. (asyncio.as_completed over a task list kept every
-    page: each finished task holds its result for as long as the list exists.) The queue is
-    bounded, so if the caller falls behind, downloads wait instead of piling up.
+
+async def as_downloaded(fetches: list[Awaitable[T]], buffer: int = 128, workers: int = 256) -> AsyncIterator[T]:
+    """Results of `fetches` in the order they finish, with at most `workers + buffer` of them
+    in memory at once.
+
+    `workers` tasks take the fetches in list order (order the list with by_host_turns) and hand
+    each result to a bounded queue. A worker whose result doesn't fit waits, so when judging is
+    slower than downloading, downloads wait instead of piling up. (One task per fetch, all started
+    at once, didn't bound memory: a task that finished while the queue was full held its page
+    until there was room. A full run of 42,894 downloads reached 12 GB that way.) A result lives
+    only until the caller is done with it.
     """
     queue: asyncio.Queue = asyncio.Queue(maxsize=buffer)
-
-    async def deliver(fetch: Awaitable[T]) -> None:
-        try:
-            item: Any = await fetch
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:  # the caller re-raises it, as as_completed would
-            item = _Failed(exc)
-        await queue.put(item)
-
-    tasks = [asyncio.create_task(deliver(f)) for f in fetches]
+    todo = iter(fetches)
     del fetches
+
+    async def worker() -> None:
+        for fetch in todo:
+            try:
+                item: Any = await fetch
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:  # the caller re-raises it, as as_completed would
+                item = _Failed(exc)
+            await queue.put(item)
+            del item
+
+    tasks = [asyncio.create_task(worker()) for _ in range(max(1, workers))]
+    done = asyncio.gather(*tasks)
     try:
-        for _ in range(len(tasks)):
-            item = await queue.get()
+        while True:
+            getter = asyncio.ensure_future(queue.get())
+            finished, _ = await asyncio.wait({getter, done}, return_when=asyncio.FIRST_COMPLETED)
+            if getter not in finished:  # every worker is done; whatever is left is queued
+                getter.cancel()
+                break
+            item = getter.result()
+            del getter
             if isinstance(item, _Failed):
                 raise item.exc
             yield item
+            del item
+        while not queue.empty():
+            item = queue.get_nowait()
+            if isinstance(item, _Failed):
+                raise item.exc
+            yield item
+            del item
+        done.result()  # a worker that crashed outside a fetch
     finally:
         for t in tasks:
             t.cancel()
+        done.cancel()
+        with contextlib.suppress(BaseException):
+            await done
+        for fetch in todo:  # never started (the caller stopped early): close, no "never awaited"
+            close = getattr(fetch, "close", None)
+            if close:
+                close()
 
 
 @dataclass
@@ -513,7 +560,8 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         by_category: Counter[str] = Counter()
 
         progress.start_phase("articles downloaded", [c.source_id for c in selected])
-        downloads = as_downloaded([progress.counted(_fetch_one(fetcher, c), c.source_id) for c in selected])
+        downloads = as_downloaded([progress.counted(_fetch_one(fetcher, c), c.source_id)
+                                   for c in by_host_turns(selected)])
         try:
             async for c, html, ex in downloads:
                 verdict = await judge.article(c, html, ex, fetcher.failures.get(c.url, "network_error"))

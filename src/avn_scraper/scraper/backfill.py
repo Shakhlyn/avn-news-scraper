@@ -33,7 +33,7 @@ from .discover.archive import ArchiveLayout, ArchiveReader, ArchiveResult, disco
 from .export import export_all
 from .fetch import Fetcher
 from .lock import is_locked
-from .pipeline import _PERMANENT_FAILURES, Judge, _fetch_one, _save, _write_run_log, as_downloaded
+from .pipeline import _PERMANENT_FAILURES, Judge, _fetch_one, _save, _write_run_log, as_downloaded, by_host_turns
 from .storage import PostgresStorage, Storage
 from .geo import about_bangladesh
 from .urls import article_id, host_of, international_section, off_topic_section, slug_text
@@ -377,7 +377,7 @@ async def _backfill_period(cfg: Config, opts: BackfillOptions, storage: Storage,
             await gate.wait()
             return await _fetch_one(fetcher, c)
 
-        downloads = as_downloaded([fetch(c) for c in selected])
+        downloads = as_downloaded([fetch(c) for c in by_host_turns(selected)])
         try:
             async for c, html, ex in downloads:
                 counts = per[c.source_id]

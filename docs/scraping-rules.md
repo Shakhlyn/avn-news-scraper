@@ -118,6 +118,11 @@ The very first run has no memory yet, so tabs without dates are read to the page
 - **No per-outlet cap**: `max_articles_per_source` is empty, so every article is downloaded.
   Set a number to cap downloads per outlet per run (newest kept). Articles a cap leaves out
   are counted in the run's stats as `capped` and logged as a warning.
+- **Download order and memory** (daily run and backfill): links are taken one site at a time
+  in turn (site A's 1st, B's 1st, C's 1st, A's 2nd, ...) by 256 download workers, and each
+  page is judged and saved as soon as it arrives, then dropped. At most 256 + 128 pages are in
+  memory at once: when judging is slower than downloading, the workers wait instead of piling
+  up pages. Each site's own pace (`per_host_delay`) is unchanged.
 - **Classification**: the full text is scored against `keywords.yaml`. An article is kept
   only if it qualifies for a category. A strong term is required, and weak terms only add
   score.
