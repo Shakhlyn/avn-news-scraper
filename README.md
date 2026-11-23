@@ -99,6 +99,43 @@ avn run --dry-run                      # try it: shows what would be saved, save
 Only one scrape runs at a time. If the service is already scraping, these say so and
 stop. A full scrape of all outlets can take up to an hour.
 
+**Scrape older news (backfill).** The daily scrape never goes further back than 30 hours.
+To get past days, months or years, use `avn backfill`. It reads each outlet's archive
+sitemaps, not homepages or feeds:
+
+```bash
+avn backfill 2024-08-05                # one day
+avn backfill 2024-08-01..2024-08-07    # a range of days (at most 31)
+avn backfill 2024-08-q1                # a quarter of a month: q1 = days 1-7, q2 = 8-15,
+                                       #   q3 = 16-23, q4 = 24 to the end
+avn backfill 2025-05                   # one month
+avn backfill 2025-05 2025-08           # several months
+avn backfill 2025-01..2025-06          # a range of months
+avn backfill 2025                      # a whole year (this year: up to yesterday)
+avn backfill 2025-05 --sources prothomalo,samakal --dry-run
+avn backfill --status                  # what is done, partial, or left to retry
+```
+
+- **Start small.** A day takes minutes, a month hours. Days and quarters send far fewer
+  requests to each site than whole months, so prefer them. Run with `--dry-run` first: it
+  shows what would be saved and saves nothing.
+- **It resumes.** Progress is kept per outlet and period. If a backfill stops, run the same
+  command again: finished outlets are skipped, the rest retried, and nothing is downloaded
+  twice. `--redo` repeats periods that are already done. Asking for the same days as a
+  range or as a quarter counts as the same period, but a finished day doesn't mark its
+  whole month as done.
+- **It's slower and politer than the daily scrape** (2 seconds between requests to a site),
+  because it runs for hours. Only one backfill runs at a time, and it pauses while the
+  daily scrape runs.
+- **Stories with no headline in the sitemap** have to be downloaded to be judged. That's
+  the default; `--untitled skip` leaves them out (faster, but misses some).
+- **Some outlets can't be backfilled:** those with no sitemap, or with sitemaps that carry no
+  dates (many local papers). `--status` shows them as `no_archive`.
+
+Backfill runs are listed with the other runs, and each has its own log in
+`data/logs/runs/`, named after the period. The full rules are in
+[docs/scraping-rules.md](docs/scraping-rules.md#backfill-past-months-or-days-avn-backfill).
+
 ## Where the results are
 
 - **Database:** start with the view `v_matches` (one row per article and category).
