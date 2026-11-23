@@ -1,6 +1,6 @@
 [project]
 name = "avn-news-scraper"
-version = "0.1.0"
+version = "1.0.0"
 description = "Daily scraper for human-rights news from Bangladeshi outlets (Bangla + English)"
 readme = "README.md"
 requires-python = ">=3.14.5"

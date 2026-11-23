@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import __version__
 from .api.v1.router import api_router
 from .core.config import Settings
 from .core.database import last_full_run, make_pool
@@ -44,7 +45,7 @@ def create_app(cfg: Config | None = None, scrapes: ScrapeManager | None = None, 
         await scrapes.stop()
         await pool.close()
 
-    app = FastAPI(title="AVN news service", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="AVN news service", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.pool = pool
     app.state.scrapes = scrapes
