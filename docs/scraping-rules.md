@@ -136,23 +136,43 @@ The very first run has no memory yet, so tabs without dates are read to the page
   only if it qualifies for a category. A strong term is required, and weak terms only add
   score.
 - **Date check**: an article published before the 30-hour window is dropped, even if a
-  link to it was found. The publication date is read from the page in this order: JSON-LD
-  `datePublished` (of the article, not the web page), publication meta tags
-  (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, a `<time>` in the
-  article or header, then any `<time>` on the page. Pages with none of these (most local
-  outlets) give a date written out next to the headline: in the headline's own block or the
-  text right after the `<h1>`, in an element named like a date/meta line
-  ("December 24, 2024", "২৪ ডিসেম্বর ২০২৪", "৫ ঘণ্টা আগে"), or a numeric day-first date after a
-  "published" label, whatever the element is called ("প্রকাশিত: ২৭/১০/২০২৬", "Published: 27-10-2026").
-  The masthead's "today" date and clocks are never used. An "updated" stamp next to the
-  headline is used only when nothing else is there (some local themes print the only date as
-  "Update Time : ..."). A date guessed by trafilatura that is a bare "today" is dropped (it is
-  the header clock); the article then gets the scrape date. Modified/updated meta tags are
-  never used, so an old story edited today does not pass, and a site-wide JSON-LD block (its page is the
-  homepage, or its headline is the outlet name) is ignored. A time without an offset is Dhaka
-  time. A full timestamp beats a bare day. When the only date is a bare day (no time, or
-  exactly 00:00:00), it is compared by day in Dhaka: a story dated with yesterday's day is
-  kept, not dropped as "before 17:30".
+  link to it was found. The page's **headline** is found first: the `<h1>` or heading-like
+  element (outside menus) whose text starts like the page's `og:title`/`<title>` (site name after
+  `|`, `–`, `-`, `»` cut off), else the longest `<h1>`. Pages carry `<h1>`s for "Share", comments
+  or the author; some themes have none (`h2.post-title`, `div.single-page-title`) or wrap the
+  headline in a link to the page itself. The date is then read in this order:
+  1. JSON-LD `datePublished` (of the article, not the web page), publication meta tags
+     (`article:published_time`, `pubdate`, ...), `itemprop="datePublished"`, then a `<time>` in
+     the headline's block (3 levels up), closest to the headline, never inside a news card,
+     teaser, related, latest, popular or sidebar block (The Daily Star's story `<article>` also
+     holds its latest-news cards). Date fields written in Bangla ("১৭:২৫, ২২ নভেম্বর ২০২৬",
+     "২২-১১-২০২৬ ০৩:১৫:৫০ অপরাহ্ন") are read with their time (পূর্বাহ্ন/সকাল/ভোর/এএম = am,
+     অপরাহ্ন/দুপুর/বিকাল/সন্ধ্যা/পিএম = pm, রাত from 6 = pm).
+  2. A date written out by the headline, in Bangla or English digits and month names
+     ("December 24, 2024", "২৪ ডিসেম্বর ২০২৪", "নভেম্বর ১১, ২০২৬", "৫ ঘণ্টা আগে"): (a) in the
+     headline's block (3 levels up) or the text right after it, in an element named like a
+     date/meta line or after a "published"/"uploaded" label, which may also give a numeric
+     day-first or year-first date ("প্রকাশিত: ২৭/১০/২০২৬", "আপলোড সময় : ২২-১১-২০২৬",
+     "আপলোড তারিখঃ ১২-০৯-২০২৬ ইং", "প্রকাশিত: ২০২৪-০২-১৬"; `ঃ` is a colon; the date may be in a child
+     of the label or beside a label in its own `<b>`/`<span>`; "১১-০৬-২০২২ ... প্রকাশিত হয়েছে" with
+     the label after); (b) a labelled publish line up to 6 levels up (a reporter column beside
+     the headline), the closest to the headline, outside teaser cards; (c) a line that is only a
+     date (weekday, time, "ইং" allowed) in the headline's block or within 300 characters after
+     it, or the last part of a byline ("… / নিজস্ব প্রতিবেদক / ২২ নভেম্বর ২০২৬"); (d) only then
+     an "updated" line ("আপডেট সময় : ...", "আপডেট করা হয়েছে : ০৫-১১-২০২৬").
+  3. A `<time>` elsewhere in the story's `<article>`; the first `<time>` on the page only when no
+     headline was found.
+  4. The day in the URL (`/2026/11/11/`).
+  5. trafilatura's guess, unless it is a bare "today" (the header clock) or outside the URL's
+     month (`/2026/11/...` guessed as 2023): then no date, and a saved article gets the scrape
+     date.
+  Never used: the masthead's "today" (a date-only line with today's date above the headline,
+  lines with the Bangla/Hijri date), a live clock (today's date with a time within 30 minutes
+  of reading the page), modified/updated meta tags (an old story edited today does not pass),
+  and a site-wide JSON-LD block (its page is the homepage, or its headline is the outlet name).
+  A time without an offset is Dhaka time. A full timestamp beats a bare day. When the only
+  date is a bare day (no time, or exactly 00:00:00), it is compared by day in Dhaka: a story
+  dated with yesterday's day is kept, not dropped as "before 17:30".
 - **Blocked pages** (403, 404, robots.txt) are judged on the headline and summary we already
   have. If they match, they are saved with `body_missing = 1`, and they are not retried.
   **Temporary failures** (timeouts, 5xx) are retried on the next run.

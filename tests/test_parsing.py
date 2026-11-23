@@ -353,6 +353,143 @@ def test_extract_local_news_templates_give_the_story_date_not_today():
     assert extract(html, "https://example.com/3", now).published_at.date().isoformat() == "2026-11-05"
 
 
+def test_extract_bangla_dates_seen_on_local_papers_2026_11_23():
+    """Templates from the 2026-11-23 survey; every one of these read as "no date" (saved as
+    today's news) or as a wrong date before."""
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 23, 21, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    clock = '<div class="row"><div class="date">সুনামগঞ্জ , সোমবার, ২৩ নভেম্বর ২০২৬ , ৯ অগ্রহায়ণ ১৪৩৩ বঙ্গাব্দ</div></div>'
+
+    def day(html, url="https://example.com/1"):
+        dt = extract(html, url, now).published_at
+        return dt.date().isoformat() if dt else None
+
+    # sunamkantha / rajshahirsomoy: "uploaded" label, the date in a child element, Bangla digits
+    html = f"""<html><body>{clock}<div class="single-white2"><h1>গণভোটের রায় মানলে মাঠে থাকবে জামায়াত</h1>
+    <div class="update-time"><ul><li>আপলোড সময় : <span>২২-১১-২০২৬ ০৩:১৫:৫০ পূর্বাহ্ন</span></li>
+    <li>আপডেট সময় : <span>২৩-১১-২০২৬ ০৩:১৫:৫০ পূর্বাহ্ন</span></li></ul></div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-11-22"
+    # somoyersomikoron: "আপলোড তারিখঃ" with the Bangla visarga as the colon
+    html = f"""<html><body>{clock}<div class="single"><h1>বাংলাদেশকে ঘিরে বিস্তৃত হচ্ছে ষড়যন্ত্র</h1>
+    <div class="update-time"><ul><li>আপলোড তারিখঃ ১২-০৯-২০২৬ ইং</li></ul></div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-09-12"
+    # rajshahinews24: no <h1>; the headline is div.single-page-title; only an "updated" line
+    html = f"""<html><head><title>মাদ্রাসা ছাত্র হত্যা: আসামিকে কারাগারে পাঠানো হয়েছে | Site</title></head>
+    <body>{clock}<div class="col-lg-9"><div class="single-page-title">মাদ্রাসা ছাত্র হত্যা: আসামিকে কারাগারে পাঠানো হয়েছে</div>
+    <div class="viwe-count"><ul><li>আপডেট করা হয়েছে : ০৫-১১-২০২৬</li></ul></div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-11-05"
+    # bholarbani / uttorbangla: no <h1>; og:title finds h2.post-title / h4.detail-headline
+    html = f"""<html><head><meta property="og:title" content="প্রতিবন্ধী নারীকে ধর্ষণের অভিযোগে আসামি পলাতক"></head>
+    <body>{clock}<div class="entry-header"><h2 class="post-title">প্রতিবন্ধী নারীকে ধর্ষণের অভিযোগে আসামি পলাতক</h2>
+    <ul class="post-meta-info"><li>প্রকাশিতঃ 23 November, 2026</li></ul></div>{_BODY}</body></html>"""
+    assert day(html) == "2026-11-23"
+    html = f"""<html><head><meta property="og:title" content="মানবাধিকার পরিস্থিতির অবনতিতে ঝুঁকিতে পাকিস্তান"></head>
+    <body>{clock}<div class="article-wrapper"><h4 class="detail-headline"><span>মানবাধিকার পরিস্থিতির অবনতিতে ঝুঁকিতে পাকিস্তান</span></h4>
+    <div class="article-meta"><span>বৃহস্পতিবার, ৫ নভেম্বর ২০২৬, ০৩:০৪ দুপুর</span></div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-11-05"
+    # no <h1> and no title match: no date (never the masthead clock)
+    html = f"""<html><head><title>Site name</title></head><body>{clock}<div>{_BODY}</div></body></html>"""
+    assert day(html) is None
+
+
+def test_date_fields_written_in_bangla_are_read_with_their_time():
+    """pressnarayanganj / narayanganjpost fill JSON-LD datePublished with "১৭:২৫, ২২ নভেম্বর ২০২৬"."""
+    from zoneinfo import ZoneInfo
+    from avn_scraper.scraper.extract import _parse_dt
+    dhaka = ZoneInfo("Asia/Dhaka")
+    assert _parse_dt("১৭:২৫, ২২ নভেম্বর ২০২৬") == datetime(2026, 11, 22, 17, 25, tzinfo=dhaka)
+    assert _parse_dt("২২-১১-২০২৬ ০৩:১৫:৫০ অপরাহ্ন") == datetime(2026, 11, 22, 15, 15, 50, tzinfo=dhaka)
+    assert _parse_dt("২২-১১-২০২৬ ১২:১০ পূর্বাহ্ন") == datetime(2026, 11, 22, 0, 10, tzinfo=dhaka)
+    assert _parse_dt("রাত ৯:৩০, ২২ নভেম্বর ২০২৬") is not None
+    assert _parse_dt("৯:৩০ রাত, ২২ নভেম্বর ২০২৬").hour == 21
+    assert _parse_dt("২২ নভেম্বর ২০২৬") == datetime(2026, 11, 22, tzinfo=dhaka)  # bare day: midnight
+    assert _parse_dt("no date in here") is None
+
+
+def test_extract_dates_from_the_2026_11_23_survey_of_all_outlets():
+    """566 article pages from 192 outlets: each template below gave no date, a wrong date, or
+    the date of a sidebar story before."""
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 23, 21, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    masthead = '<div class="row"><div class="date">সোমবার, ২৩ নভেম্বর ২০২৬, ৯ অগ্রহায়ণ ১৪৩৩</div></div>'
+
+    def day(html, url="https://example.com/news/1"):
+        dt = extract(html, url, now).published_at
+        return dt.astimezone(ZoneInfo("Asia/Dhaka")).date().isoformat() if dt else None
+
+    # The Daily Star: no datePublished; the story's <article> also holds latest-news cards whose
+    # <time>s come first. The story's own <time> next to the headline wins, cards never count.
+    cards = "".join(f'<div class="card"><div class="card-content"><div class="card-info"><span>'
+                    f'<time datetime="2026-11-23T{h}:00:00+06:00">{h} HOUR(s)</time></span></div></div></div>'
+                    for h in ("08", "09", "11"))
+    ld = '<script type="application/ld+json">{"@type":"NewsArticle","headline":"x"}</script>'
+    html = f"""<html><head>{ld}<title>মানুষের ত্বকের গন্ধই মশাকে আকৃষ্ট করে</title></head><body><article class="node">
+    <div class="row"><div class="column">{cards}</div><div class="column"><div class="layout"><div class="block">
+    <h1>মানুষের ত্বকের গন্ধই মশাকে আকৃষ্ট করে</h1><div><time datetime="2026-11-11T14:37:07+06:00">১১ নভেম্বর ২০২৬</time></div>
+    {_BODY}</div></div></div></div></article></body></html>"""
+    assert day(html) == "2026-11-11"
+    # ... and in English, with no <time> of its own: "Published : 3 October 2026"
+    html = f"""<html><head>{ld}<title>Dhaka swagger smoke and salvage</title></head><body><article class="node">
+    <div class="row"><div class="column"><div class="layout">{cards}<div class="block"><h1>Dhaka swagger smoke and salvage</h1>
+    <div><span class="normal-case">Published : 3 October 2026</span></div>{_BODY}</div></div></div></div></article></body></html>"""
+    assert day(html) == "2026-10-03"
+    # <h1>s for the author and the comment box; the headline is h3, matched by the page title;
+    # the date sits in a reporter box in the next column (sylhettoday24)
+    html = f"""<html><head><title>চট্টগ্রাম সমুদ্রবন্দর: উন্নয়নের নামে নব্য উপনিবেশায়ন</title></head><body>{masthead}
+    <div class="container"><div class="row"><div class="col-md-3"><div class="reporterPartSection"><h1>আনু মুহাম্মদ</h1>
+    <div class="date-time"><p>০৯ অক্টোবর, ২০২৬ ০৩:২৯</p></div></div></div><div class="col-md-6"><div class="single">
+    <h3>চট্টগ্রাম সমুদ্রবন্দর: উন্নয়নের নামে নব্য উপনিবেশায়ন</h3>{_BODY}</div></div></div></div>
+    <div><h1>আপনার মন্তব্য</h1><p class="comment-date">২০ নভেম্বর ২০২৬</p></div></body></html>"""
+    assert day(html) == "2026-10-09"
+    # label alone in a <b>, date beside it; Bangla am "এএম"; headline in a link to the page (comillarkagoj)
+    html = f"""<html><head><title>সৌদিতে এক সপ্তাহে প্রায় ১১ হাজার প্রবাসী গ্রেপ্তার</title></head><body>{masthead}
+    <div class="dtl"><a href="/news/1"><div class="title_detail"><b>সৌদিতে এক সপ্তাহে প্রায় ১১ হাজার প্রবাসী গ্রেপ্তার</b></div></a>
+    <div class="pub"><b>প্রকাশ:</b> সোমবার, ২০ নভেম্বর, ২০২৬, ১২:০০ এএম |</div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-11-20"
+    # year-first numeric date after a label in a <strong> (sylhettoday24)
+    html = f"""<html><body><h1>গ্রন্থমেলায় এম এল গনির বই প্রকাশিত</h1>
+    <div class="date-time"><p class="published"><strong>প্রকাশিত:</strong> ২০২৪-০২-১৬ ০২:০৬:২৮</p></div>{_BODY}</body></html>"""
+    assert day(html) == "2024-02-16"
+    # labelled line in a reporter column 4 levels from the headline (karatoa)
+    html = f"""<html><body>{masthead}<div class="bottom_border"><div class="row"><div class="col-md-3">
+    <div class="rpt_and_share_bl"><div class="rpt_info_section"><div class="entry_update"><div>প্রকাশ : ১৪ নভেম্বর, ২০২৬ ০৭:০১ পিএম</div>
+    </div></div></div></div><div class="col-md-9"><div class="headline_content"><div class="headline_section">
+    <h1 class="details-title">জাকাতের অর্থে মাদরাসা লাইব্রেরির জন্য বই কেনা</h1></div></div>{_BODY}</div></div></div></body></html>"""
+    assert day(html) == "2026-11-14"
+    # a line that is only a date, right under the headline (ajkerbhola, kishoreganjnews) ...
+    html = f"""<html><head><title>মনপুরায় বিদ্যুৎস্পৃষ্ট হয়ে এক কিশোরের মৃত্যু</title></head><body>{masthead}
+    <div><h2>মনপুরায় বিদ্যুৎস্পৃষ্ট হয়ে এক কিশোরের মৃত্যু</h2><div class="col-md-4">শনিবার, ১৪ নভেম্বর ২০২৬</div>{_BODY}</div></body></html>"""
+    assert day(html) == "2026-11-14"
+    html = f"""<html><body><h1>জেলা গণগ্রন্থাগারে বিজয় দিবস উদযাপন</h1><span class="text-gray-500">ডিসেম্বর ১৩, ২০২৫</span>{_BODY}</body></html>"""
+    assert day(html) == "2025-12-13"
+    # ... or the last part of a byline (chapainawabganjnews)
+    html = f"""<html><body><h1>মাকে বাঁচাতে গিয়ে প্রাণ গেল মেয়েরও</h1>
+    <div>চাঁপাইনবাবগঞ্জ নিউজ / নিজস্ব প্রতিবেদক / ২২ নভেম্বর ২০২৬</div>{_BODY}</body></html>"""
+    assert day(html) == "2026-11-22"
+    # the label after the date (sirajganjkantho)
+    html = f"""<html><body><h1>কামারখন্দে ট্রেনে কাটা পড়ে মৃত্যু</h1>
+    <div class="meta">১১-০৬-২০২২ ০১:১০ অপরাহ্ন প্রকাশিত হয়েছে এবং ৩০ বার দেখা হয়েছে</div>{_BODY}</body></html>"""
+    assert day(html) == "2022-06-11"
+    # a masthead "today" above the headline is not the story's date; nor is a live header clock
+    html = f"""<html><body><div><div>সোমবার, ২৩ নভেম্বর ২০২৬</div><h1>শিরোনাম এখানে আছে আজ</h1>{_BODY}</div></body></html>"""
+    assert day(html) is None
+    html = f"""<html><body><div class="date">November 23, 2026, 8:55 pm</div><h1>শিরোনাম এখানে আছে আজ</h1>{_BODY}</body></html>"""
+    assert day(html) is None
+
+
+def test_extract_uses_the_url_day_and_drops_a_guess_outside_the_url_month():
+    from zoneinfo import ZoneInfo
+    from selectolax.lexbor import LexborHTMLParser
+    from avn_scraper.scraper import extract as X
+    now = datetime(2026, 11, 23, 21, 0, tzinfo=ZoneInfo("Asia/Dhaka"))
+    tree = LexborHTMLParser("<html><body><h1>no date here at all</h1></body></html>")
+    dt, bare = X._published(tree, [], None, now, "https://dainikkushtia.net/2026/11/11/story")
+    assert dt.date().isoformat() == "2026-11-11" and bare
+    assert X._published(tree, [], "2023-02-24", now, "http://x.com/2026/11/blog-post_22.html") == (None, False)
+    dt, _ = X._published(tree, [], "2026-11-20", now, "http://x.com/2026/11/blog-post_22.html")
+    assert dt.date().isoformat() == "2026-11-20"
+
+
 def test_extract_a_real_date_beats_an_update_stamp():
     from zoneinfo import ZoneInfo
     now = datetime(2026, 11, 22, 20, 0, tzinfo=ZoneInfo("Asia/Dhaka"))

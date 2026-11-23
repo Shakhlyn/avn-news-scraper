@@ -247,6 +247,8 @@ either a lost story (read as too old) or old news shown as new.
 - **Why / problem before:** a sidebar `<time>` (another story's date) won over the article's
   own date and **dropped fresh stories as too old**.
 - **Evidence:** 91770bb.
+- **Changed 2026-11-23 (5.8):** `<time>` only near the headline and outside news cards; the
+  page's first `<time>` only when no headline is found (The Daily Star's was a card's).
 
 ### 5.2 Modified/updated dates are never used (except as the only date next to the headline)
 
@@ -284,6 +286,7 @@ either a lost story (read as too old) or old news shown as new.
   the **masthead's "today" date**, so old stories were saved as new. Numeric day-first dates
   (ajkersylhet) weren't read at all.
 - **Evidence:** d80bfa3, f35b984.
+- **Extended 2026-11-23 (5.8):** title-matched headline, labelled/date-only lines, Bangla date fields, URL day.
 
 ### 5.7 Date patterns are bounded
 
@@ -291,6 +294,43 @@ either a lost story (read as too old) or old news shown as new.
 - **Why / problem before:** a long digit run made the regex backtrack (**20,000 digits → 9 s**),
   and "99999999999 days ago" crashed with OverflowError. Pages are untrusted input.
 - **Evidence:** 116fd28.
+
+### 5.8 Dates read from every outlet's own layout, Bangla or English
+
+- **Rule:** headline = the element matching the page title; `<time>`s only near the headline and
+  never in teaser cards; written dates in Bangla or English by the headline (meta/labelled lines,
+  labelled lines up to 6 levels, date-only lines and bylines, then "updated" lines); then the
+  URL's day; trafilatura's guess last, dropped when it is "today" or outside the URL's month.
+  Upload labels count as publish labels; `ঃ` is a colon; Bangla date fields keep their time;
+  live clocks and masthead dates are skipped. Full order in `scraping-rules.md`.
+- **Why / problem before:** a survey on 2026-11-23 of **566 article pages from 192 outlets**
+  (3 per enabled outlet, local and national), each checked by hand where the date changed:
+  - **The Daily Star (Bangla and English)** has no `datePublished`; the reader took the first
+    `<time>` in its `<article>`, a latest-news card timestamped today, so **every old Daily
+    Star story read as today's**.
+  - sunamkantha (85 undated saves on 2026-11-23, all old), rajshahirsomoy (read as 2008),
+    somoyersomikoron: `আপলোড সময়/তারিখ` labels; indentation pushed sunamkantha's line over
+    the 300-character cap.
+  - Wrong headline: sylhettoday24 (`<h1>` = author and comment box), somoyersomikoron (author),
+    six themes with no `<h1>`, comillarkagoj/narayanganjeralo (headline inside a link),
+    bonikbarta (short title running into the site name).
+  - Dates the reader never reached: karatoa and noakhalirkatha (labelled line in the next
+    column), bonikbarta/comillarkagoj (label alone in a `<b>`), ajkerbhola/kishoreganjnews/
+    amaderbarisal (a date-only line), chapainawabganjnews (byline), sirajganjkantho (label
+    after the date), Bangla date fields (pressnarayanganj, narayanganjpost, janakantha).
+  - trafilatura's guess was wrong where it was used: karatoa 1 Nov (really 14 Nov),
+    noakhalirkatha 1 Jul (14 Jul), habiganjexpress/savarsangbad/tangailpratidin the same
+    `2026-11-11`, kushtiapress `2025-01-01`, chapainawabganjnews 2023 for a `/2026/11/` URL.
+- **After:** 74 of 566 pages changed day, every one checked against the page and correct.
+  Pages dated only by the guess went from 43 to 15; the rest without a date are tab, category,
+  privacy or e-paper pages, a bot check (newnation), a JavaScript-only page (channel24, whose
+  feed gives the date), or pages that show no date (amaderprotidin, barishaltimes). Parsing
+  speed unchanged (15.7 vs 19.4 ms a page).
+- **Cost:** the wider searches could pick a related story's date; they take labelled or
+  date-only lines, closest to the headline, outside teaser blocks, and a masthead "today" above
+  the headline is skipped. An undated page still gets the scrape date.
+- **Not fixed here:** 332 of bss's 336 undated items on 2026-11-23 were `notice_info` pages
+  (official notices), not news.
 
 ---
 
@@ -622,3 +662,5 @@ either a lost story (read as too old) or old news shown as new.
 | 2026-11-23 | Probed pages kept until the run ends | Kept only for links that will be downloaded | 3.2, 8.7 |
 | 2026-11-23 | Backfill 2 s for every site, 3 blocks in a row | 1 s for four clean sites, 2 blocks in the run | 9.3, 9.8 |
 | 2026-11-23 | One download task per link, all started at once | 256 workers, links in turns by site; at most 384 pages in memory | 8.4, 8.8 |
+| 2026-11-23 | Menu/footer tab links downloaded as articles | Dropped before probes and download | 2.4, 2.8 |
+| 2026-11-23 | Any `<time>` in the `<article>`; written date only near the longest `<h1>`; ISO date fields; guess before URL | Title-matched headline, `<time>`s near it outside cards, Bangla/English written dates, URL day, guess checked | 5.1, 5.6, 5.8 |
