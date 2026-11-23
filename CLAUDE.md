@@ -14,7 +14,9 @@ The functions it calls stay plain `def`. No threads of our own, and no sync `psy
 
 - The scraping rules (30-hour window, which tabs / print editions are read, pagination
   stops, what is skipped and kept) are in `docs/scraping-rules.md`. Follow them, and update
-  that file whenever a change alters them.
+  that file whenever a change alters them. Why each rule exists (the problem it fixed, the
+  evidence, the cost) is in `docs/scraping-decisions.md`: read it before changing a rule, and
+  add the new decision there, marking the old one as replaced.
 - Tests: `.venv/bin/python -m pytest -q`. Check real sites with `.venv/bin/avn check-sources -v`
   and `.venv/bin/avn run --dry-run`. Never run a real `avn run` just to test; it writes data.
 

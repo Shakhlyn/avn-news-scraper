@@ -2,7 +2,8 @@
 
 These rules say what the scraper reads, how far back it goes, and what it keeps.
 Change the code only together with this file. Settings live in `config/settings.yaml`
-and outlets in `config/sources.yaml`.
+and outlets in `config/sources.yaml`. Why each rule exists, and what went wrong without
+it, is in [scraping-decisions.md](scraping-decisions.md); update both together.
 
 ## Schedule and time window
 
