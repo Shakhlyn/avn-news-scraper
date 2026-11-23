@@ -156,6 +156,16 @@ def _merge(candidates: list[Candidate]) -> dict[str, Candidate]:
     return merged
 
 
+def _drop_unused_pages(candidates: list[Candidate], selected: list[Candidate]) -> None:
+    """Forget the probed pages of links that won't be downloaded (known, off-topic, foreign,
+    capped, or a duplicate merged into another). They would otherwise stay in memory, held
+    by the discovery results, until the run ends."""
+    chosen = {id(c) for c in selected}
+    for c in candidates:
+        if id(c) not in chosen:
+            c.prefetched = None
+
+
 def _assign_sources(candidates: list[Candidate], sources: list[Source]) -> None:
     """Catch-all results that belong to a configured outlet get that outlet's id."""
     for c in candidates:
@@ -483,6 +493,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         if prefilter:
             new = await asyncio.to_thread(_keyword_hits, classifier, new)
         selected, capped = _cap_per_source(list(new.values()), s.get("max_articles_per_source"), started)
+        _drop_unused_pages(candidates, selected)
         stats["selected_for_fetch"] = len(selected)
         if capped:
             stats["capped"] = capped

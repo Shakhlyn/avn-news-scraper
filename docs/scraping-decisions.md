@@ -163,6 +163,8 @@ The guiding priorities, in order, when two rules pull against each other:
   homepage links are excluded because "latest" widgets are always fresh.
 - **Cost:** up to 3 article downloads per listing page. They're reused, so mostly not extra.
 - **Evidence:** d80bfa3.
+- **Changed 2026-11-23 (8.7):** a probe keeps the page only for a link that will be
+  downloaded; an old article keeps just its date.
 
 ### 3.3 Regional tabs: at most 3 pages; national tabs up to 20
 
@@ -418,6 +420,27 @@ either a lost story (read as too old) or old news shown as new.
 
 ---
 
+### 8.7 Probed pages are kept only for links that will be downloaded
+
+- **Rule:** a date probe that finds an old article keeps only the date. After filtering,
+  `_drop_unused_pages` clears the probed page of every link not selected (known, off-topic,
+  foreign, capped, merged duplicates). Selected links still reuse their page (no second download).
+- **Why / problem before:** every probed page stayed on its link (`c.prefetched`) until it
+  was judged, and filtered-out links are never judged, so their pages lived until the run
+  ended. Old articles are what the probe exists to find, so most probed pages were waste.
+  Profile, 8 regional papers, dry run: 132 probed pages (26.7 MB), **all 132 unused** (131
+  old); the largest single Python allocation after discovery.
+- **After the fix** (same 8 papers, dry run): probed pages held **0** (was 132, 26.7 MB),
+  Python memory after discovery **50.8 MB** (was 103.3; the page text and its jusText parse
+  are gone), peak RSS **501 MB** (was 578). `malloc_trim` at the end returned only 76 MB
+  (502 → 426), so at this size the allocator is not hoarding freed memory.
+- **Not the whole story:** the 2026-11-23 14:01 daily run (first full run without the
+  pre-filter, 100 min, 26,169 too-old downloads) held **12.3 GB**, 10.9 GB of it in the main
+  heap. Probe pages scale to about 0.5 GB for all regional outlets, and the small profile
+  doesn't reproduce the growth, so the rest is something that grows with run size. Still
+  open (ticket-038).
+- **Cost:** none; the same pages are downloaded and reused.
+
 ## 9. Backfill (past months and days)
 
 ### 9.1 Backfill is on demand and separate from the daily run
@@ -441,29 +464,6 @@ either a lost story (read as too old) or old news shown as new.
   pauses during the daily run because the two have separate `Fetcher`s, so running together
   would hit each site at **twice** the rate either one promises (same reason as 1.4).
 - **Cost:** slower. Backfill time ≈ requests to the busiest site × 2-3 s.
-
-### 9.4 Pre-filter on the sitemap headline or URL slug; untitled entries downloaded by default
-
-- **Rule:** with a headline, only keyword hits are downloaded. With none (Prothom Alo's
-  `/uyrdgbm7hw`), `backfill.untitled: download` (default) downloads to judge; `skip` leaves out.
-  Untitled media links (video, photo, live, ...) are never downloaded.
-- **Why:** without the pre-filter a month is 3,000-9,000 downloads per outlet. Untitled
-  entries default to download because skipping them silently drops most of Prothom Alo.
-- **Cost:** the headline pre-filter misses stories whose keywords are only in the body; the
-  daily run doesn't use it (4.1). How many is unmeasured (ticket-029).
-
-### 9.5 Days, day ranges and quarters, not only months
-
-- **Why / problem before:** a month can mean thousands of requests to one site over hours.
-  Smaller periods read only the daily files they need and give natural stopping points.
-  Entries from undated-name files are kept when `lastmod` is in the period plus a slack
-  (2 days for a day, up to 31 for a month), because edits move `lastmod` later.
-- **Cost:** an article edited later than the slack is missed.
-- **Evidence:** b0af46b.
-
-### 9.6 Progress per (outlet, period); a day never marks its month done
-
-- **Why:** a backfill gets interrupted (blocks, PC off, cooldowns). Re-running the same
 - **Partly replaced 2026-11-23 by 9.8:** four sites with a clean block record go at 1 s.
 
 ### 9.8 Big sites with zero blocks go at 1 s in a backfill; 2 blocks in the run stop any site
@@ -487,6 +487,29 @@ either a lost story (read as too old) or old news shown as new.
   the user chose it on 2026-11-23. A ban would apply to the IP, so the daily run on the same
   machine would lose the site too. Check the block log after each backfill.
 - **Replaces:** the "speed up below the delay" rejection in section 11, for these four sites.
+
+### 9.4 Pre-filter on the sitemap headline or URL slug; untitled entries downloaded by default
+
+- **Rule:** with a headline, only keyword hits are downloaded. With none (Prothom Alo's
+  `/uyrdgbm7hw`), `backfill.untitled: download` (default) downloads to judge; `skip` leaves out.
+  Untitled media links (video, photo, live, ...) are never downloaded.
+- **Why:** without the pre-filter a month is 3,000-9,000 downloads per outlet. Untitled
+  entries default to download because skipping them silently drops most of Prothom Alo.
+- **Cost:** the headline pre-filter misses stories whose keywords are only in the body; the
+  daily run doesn't use it (4.1). How many is unmeasured (ticket-029).
+
+### 9.5 Days, day ranges and quarters, not only months
+
+- **Why / problem before:** a month can mean thousands of requests to one site over hours.
+  Smaller periods read only the daily files they need and give natural stopping points.
+  Entries from undated-name files are kept when `lastmod` is in the period plus a slack
+  (2 days for a day, up to 31 for a month), because edits move `lastmod` later.
+- **Cost:** an article edited later than the slack is missed.
+- **Evidence:** b0af46b.
+
+### 9.6 Progress per (outlet, period); a day never marks its month done
+
+- **Why:** a backfill gets interrupted (blocks, PC off, cooldowns). Re-running the same
   command must skip finished work and retry the rest, never redo hours of requests.
 - **Evidence:** 95cf166, b0af46b.
 
@@ -554,4 +577,5 @@ either a lost story (read as too old) or old news shown as new.
 | 2026-11-22 | All sections | Off-topic skipped; world news only about Bangladesh | 2.5, 2.6 |
 | 2026-11-22 | Backfill by month only | Days, ranges, quarters | 9.5 |
 | 2026-11-22 | Download all, then judge | Judge and save per download | 8.4 |
+| 2026-11-23 | Probed pages kept until the run ends | Kept only for links that will be downloaded | 3.2, 8.7 |
 | 2026-11-23 | Backfill 2 s for every site, 3 blocks in a row | 1 s for four clean sites, 2 blocks in the run | 9.3, 9.8 |

@@ -75,7 +75,9 @@ Each tab (and the print edition) is read page by page, following its "next page"
    when all are older than the window, the tab stops. The bottom of the page is checked, not
    the top, because local sites often pin older stories above the newest. Links also on the
    homepage ("latest" / "most read" widgets) are not sampled. Probed articles are not
-   downloaded again: old ones are dropped, the rest go on to classification.
+   downloaded again: an old one keeps only its date (its page is dropped at once and the link
+   filtered out), the rest go on to classification. Once the links are filtered, the probed
+   page of every link that won't be downloaded (known, off-topic, foreign) is dropped too.
 2. **Previous run reached**: at least half of the page's links were already seen by an
    earlier run (`data/cache/listing_seen.json`), kept 4 days. Since the job runs every
    24 hours, that is where the last run stopped. Dry runs and `check-sources` never update this file.

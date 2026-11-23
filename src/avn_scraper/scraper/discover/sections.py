@@ -217,7 +217,7 @@ def _is_old(published: datetime, date_only: bool, cutoff: datetime) -> bool:
 
 async def _probe(fetcher: Fetcher, c: Candidate) -> tuple[datetime, bool] | None:
     """Download one listed article and read its publication date. The page is kept on the
-    candidate for the pipeline; an old one also gets its date, so it is filtered out."""
+    candidate for the pipeline (probe_past_window drops it again when the article is old)."""
     if find_adapter(c.url) is not None:
         return None
     resp = await fetcher.get(c.url, "article")
@@ -247,7 +247,10 @@ async def probe_past_window(fetcher: Fetcher, items: list[Candidate], cutoff: da
         published, date_only = found
         old = _is_old(published, date_only, cutoff)
         if old:
+            # The date is all the pipeline needs: it filters the link out before downloading.
+            # Keeping the page held every old probed article in memory for the whole run.
             c.published_at = published.astimezone(timezone.utc)
+            c.prefetched = None
         verdicts.append(old)
     return bool(verdicts) and len(verdicts) >= min(2, len(picked)) and all(verdicts)
 

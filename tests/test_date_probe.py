@@ -68,9 +68,9 @@ def _run(dates: dict[int, str], kind: str = "regional"):
 def test_old_bottom_of_page_stops_paging():
     items, pages_read, requests = _run({1: FRESH, 2: FRESH, 3: OLD, 4: OLD, 5: OLD})
     assert pages_read == 1 and requests["/local?page=2"] == 0
-    # the probed old articles carry their date (filtered before download), the pages are kept
-    probed = {c.url.rsplit("/", 1)[-1]: c for c in items if c.prefetched}
-    assert set(probed) == {"3", "4", "5"} and all(c.published_at for c in probed.values())
+    # the probed old articles carry their date (filtered before download), not their pages
+    probed = {c.url.rsplit("/", 1)[-1]: c for c in items if c.published_at}
+    assert set(probed) == {"3", "4", "5"} and not any(c.prefetched for c in probed.values())
     assert requests["/news/99"] == 0  # the homepage widget is never probed
 
 
@@ -164,3 +164,16 @@ def test_regional_tabs_read_at_most_regional_max_pages():
     assert read == 3
     _, _, read = asyncio.run(go("national"))
     assert read > 3
+
+
+def test_pages_of_links_not_downloaded_are_dropped_after_filtering():
+    from avn_scraper.scraper.discover import Candidate
+    from avn_scraper.scraper.pipeline import _drop_unused_pages, _merge
+
+    def probed(n):
+        return Candidate(url=f"{SITE}/news/{n}", source_id="local", via="listing", prefetched=("<html>", "EX"))
+    picked, known, duplicate = probed(1), probed(2), probed(1)
+    merged = _merge([picked, known, duplicate])
+    _drop_unused_pages([picked, known, duplicate], [merged[next(iter(merged))]])
+    assert picked.prefetched == ("<html>", "EX")  # still reused instead of a second download
+    assert known.prefetched is None and duplicate.prefetched is None
