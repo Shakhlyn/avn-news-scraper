@@ -250,11 +250,31 @@ class RunGate:
             self._checked = loop.time()
 
 
-def _http_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    """The daily run's HTTP settings, with the backfill's slower per-site pace."""
+def _http_settings(settings: dict[str, Any], sources: list[Source]) -> dict[str, Any]:
+    """The daily run's HTTP settings, with the backfill's pace and stricter breaker.
+
+    Every site waits backfill.per_host_delay between requests, except backfill.fast_sources
+    (outlets with a clean block record), which wait backfill.fast_delay, never less than the
+    daily run's per_host_delay. `fetch: impersonate` outlets are never fast. A site is stopped
+    after backfill.block_threshold blocks in the run, not only in a row."""
     http = dict(settings.get("http") or {})
     bf = settings.get("backfill") or {}
-    http["per_host_delay"] = max(float(http.get("per_host_delay", 1.0)), float(bf.get("per_host_delay", 2.0)))
+    daily = float(http.get("per_host_delay", 1.0))
+    http["per_host_delay"] = max(daily, float(bf.get("per_host_delay", 2.0)))
+    fast_delay = max(daily, float(bf.get("fast_delay", http["per_host_delay"])))
+    by_id = {s.id: s for s in sources}
+    host_delays: dict[str, float] = {}
+    for sid in bf.get("fast_sources") or []:
+        src = by_id.get(sid)
+        if src is None:
+            log.warning("backfill.fast_sources: no outlet %r in sources.yaml; ignored", sid)
+        elif src.fetch == "impersonate":
+            log.warning("backfill.fast_sources: %s uses fetch: impersonate, never fast; ignored", sid)
+        elif host := urlsplit(src.homepage).hostname:
+            host_delays[host] = fast_delay
+    http["host_delays"] = host_delays
+    http["block_threshold"] = min(int(http.get("block_threshold", 3)), int(bf.get("block_threshold", 2)))
+    http["block_strikes_reset"] = False
     return http
 
 
@@ -313,7 +333,7 @@ async def _backfill_period(cfg: Config, opts: BackfillOptions, storage: Storage,
     per: dict[str, Counter] = {s.id: Counter() for s in sources}
     info: dict[str, dict[str, Any]] = {}
 
-    async with Fetcher(_http_settings(cfg.settings), transport=transport, sources=cfg.sources,
+    async with Fetcher(_http_settings(cfg.settings, cfg.sources), transport=transport, sources=cfg.sources,
                        cooldown_path=cfg.host_blocks_path, block_log=block_log) as fetcher:
         reader.use(fetcher)
 

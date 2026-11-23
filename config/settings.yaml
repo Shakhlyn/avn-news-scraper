@@ -88,6 +88,17 @@ sections:
 # daily scrape runs. See docs/scraping-rules.md.
 backfill:
   per_host_delay: 2.0     # seconds between requests to one site (plus per_host_jitter)
+  # Outlets (sources.yaml ids) read at fast_delay instead: big sites with zero blocks in the
+  # block log at the daily run's 1 s pace, whose untitled sitemaps make them the slowest part
+  # of a backfill. Homepage host only (subdomains stay at per_host_delay); never below
+  # http.per_host_delay; `fetch: impersonate` outlets are ignored. Check the block log after
+  # each backfill, and take a site off this list at its first block.
+  fast_delay: 1.0         # plus per_host_jitter, so 1-1.5 s
+  fast_sources: [nayadiganta, prothomalo, dhakapost, bonikbarta]
+  # A backfill stops a site after this many block answers in the run (not only in a row),
+  # with the usual cooldown. Stricter than http.block_threshold: a backfill reads one site
+  # for a long time, so it backs off sooner.
+  block_threshold: 2
   # Sitemap entries with no headline (no title, URL ends in an id such as Prothom Alo's
   # /uyrdgbm7hw) can't be keyword-filtered: download them to judge (complete, slower)
   # or skip them.

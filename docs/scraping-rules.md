@@ -257,9 +257,16 @@ avn backfill --status                 # what is done, partial, left to retry
   Links an earlier daily run skipped only for being too old are not skipped here, and the
   backfill never marks a link as too old.
 - **Politeness:** one site at a time is read `backfill.per_host_delay` (2 s, plus jitter)
-  apart, slower than the daily run because a backfill runs for hours. The block breaker,
-  cooldown and Chrome fingerprint apply as in the daily run. Each month is one run in the
-  block log (`<time>_backfill.jsonl`).
+  apart, slower than the daily run because a backfill runs for hours. Outlets in
+  `backfill.fast_sources` (nayadiganta, prothomalo, dhakapost, bonikbarta: zero blocks in the
+  block log) are read `backfill.fast_delay` (1 s, plus jitter) apart instead: their homepage
+  host only, never below `http.per_host_delay`, never a `fetch: impersonate` outlet (those stay
+  at 3 s). Take a site off the list at its first block.
+- **Stricter breaker:** a backfill stops a site after `backfill.block_threshold` (2) block
+  answers **in the run**, not only in a row (an answer in between doesn't reset the count),
+  then the usual 12-hour cooldown. Slow-down on each block, `Retry-After` and the Chrome
+  fingerprint apply as in the daily run. Each period is one run in the block log
+  (`<time>_backfill.jsonl`).
 - **Next to the daily run:** a backfill has its own lock (`data/.backfill.lock`, one at a time).
   While the daily scrape or `avn run` holds the run lock it pauses, so the two never hit a
   site together. Backfill runs are saved in `runs` with `stats.backfill`, and never count as

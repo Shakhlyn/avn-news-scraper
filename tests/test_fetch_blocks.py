@@ -553,3 +553,46 @@ def test_leaving_a_curl_stream_early_tells_curl_to_stop(monkeypatch):
     routes = {url: first, "https://www.example-paper.com/final": _FakeCurlResponse(200, b"<html>ok</html>")}
     (resp, _) = _impersonated(routes, lambda f: f.get(url))
     assert resp.text == "<html>ok</html>" and first.quit_now.is_set()
+
+
+def test_host_delay_overrides_the_default_for_that_site_only(monkeypatch):
+    slept = _no_sleep(monkeypatch)
+
+    async def go(f):
+        for host in ("93.184.216.34", "1.1.1.1"):
+            for path in ("a", "b"):
+                await f.get(f"https://{host}/{path}")
+    _run(go, lambda r: httpx.Response(200, content=b"<html>ok</html>"),
+         settings={"per_host_delay": 2, "host_delays": {"93.184.216.34": 1}})
+    assert sorted(round(s, 1) for s in slept if s > 0) == [1.0, 2.0]
+
+
+def test_impersonated_site_never_below_impersonate_delay(monkeypatch):
+    _public_dns(monkeypatch)
+    slept = _no_sleep(monkeypatch)
+    urls = ["https://www.example-paper.com/a", "https://www.example-paper.com/b"]
+
+    async def go(f):
+        for url in urls:
+            await f.get(url)
+    _impersonated({u: _FakeCurlResponse(200, b"<html>article</html>") for u in urls}, go,
+                  settings={"per_host_delay": 2, "impersonate_delay": 3,
+                            "host_delays": {"example-paper.com": 1}})
+    assert [round(s, 1) for s in slept if s > 0] == [3.0]
+
+
+def test_run_wide_strikes_stop_a_site_whose_blocks_are_not_in_a_row(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    answers = iter([403, 200, 403, 200, 200])
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(next(answers), content=b"<html>page</html>")
+
+    async def go(f):
+        return [await f.get(f"https://93.184.216.34/{i}") for i in range(5)], f.stopped_hosts()
+    out, stopped = _run(go, handler, settings={"block_threshold": 2, "block_strikes_reset": False},
+                        cooldown_path=tmp_path / "blocks.json")
+    assert len(calls) == 3  # stopped at the 2nd block although an answer came between
+    assert "this run" in stopped["93.184.216.34"]

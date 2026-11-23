@@ -464,6 +464,29 @@ either a lost story (read as too old) or old news shown as new.
 ### 9.6 Progress per (outlet, period); a day never marks its month done
 
 - **Why:** a backfill gets interrupted (blocks, PC off, cooldowns). Re-running the same
+- **Partly replaced 2026-11-23 by 9.8:** four sites with a clean block record go at 1 s.
+
+### 9.8 Big sites with zero blocks go at 1 s in a backfill; 2 blocks in the run stop any site
+
+- **Rule:** `backfill.fast_sources` (nayadiganta, prothomalo, dhakapost, bonikbarta) at
+  `fast_delay` 1 s + jitter (1-1.5 s); every other site stays at 2 s. Homepage host only,
+  never below the daily 1 s, never `impersonate` sites. A backfill stops a site after
+  `backfill.block_threshold` 2 blocks in the run (not only in a row; daily run: 3 in a row).
+- **Why / problem before:** the 2026-11-08..15 quarter took **89 min**, and nayadiganta alone
+  set that length: 1,786 requests × ~2.5 s. Its sitemap has no headlines, so every article is
+  downloaded (`untitled: download`); 112 of ~1,700 were saved. Most other sites had finished
+  in the first 20 minutes, leaving the 32 download slots idle.
+- **Evidence for the four:** zero blocks in every logged run, daily runs at 1 s included
+  (requests at 1 s in daily runs / at 2 s in backfills: nayadiganta 1,350 / 2,029;
+  prothomalo 1,471 / 1,103; dhakapost 290 / 1,352; bonikbarta 925 / 930). Bot blocks seen so far come from fingerprints and
+  arrive within 2-3 requests at any pace (kalerkantho), not from speed.
+- **Why the stricter breaker:** 1 s for 30-40 minutes non-stop is more than these sites have
+  seen from us. Stopping at the 2nd block, counted across the run, backs off before a firewall
+  escalates, including a site that alternates blocks and answers.
+- **Cost / risk:** higher volume per minute to four sites than the epic's rule 1 allowed;
+  the user chose it on 2026-11-23. A ban would apply to the IP, so the daily run on the same
+  machine would lose the site too. Check the block log after each backfill.
+- **Replaces:** the "speed up below the delay" rejection in section 11, for these four sites.
   command must skip finished work and retry the rest, never redo hours of requests.
 - **Evidence:** 95cf166, b0af46b.
 
@@ -498,7 +521,7 @@ either a lost story (read as too old) or old news shown as new.
 
 | Idea | Decision | Why |
 |---|---|---|
-| Speed up a site below its delay (adaptive) | Rejected for now | The breaker reacts after 3 blocks; some firewalls ban silently or extend bans on repeat. Our signals lag the damage. Revisit only for sites with months of zero blocks, never `impersonate` sites. (Epic faster-backfill, 2026-11-23) |
+| Speed up a site below its delay (adaptive) | Rejected for now; fixed 1 s for four clean sites since 2026-11-23 (9.8) | The breaker reacts after 3 blocks; some firewalls ban silently or extend bans on repeat. Our signals lag the damage. Revisit only for sites with months of zero blocks, never `impersonate` sites. (Epic faster-backfill, 2026-11-23) |
 | Headline pre-filter in the daily run | Off by default | Lost plain-headline and print stories (4.1). |
 | Fill missed days automatically | Rejected | Unbounded runs (1.2). |
 | OCR of image-only e-papers | Not built | Expensive; most print stories are also on the website. |
@@ -531,3 +554,4 @@ either a lost story (read as too old) or old news shown as new.
 | 2026-11-22 | All sections | Off-topic skipped; world news only about Bangladesh | 2.5, 2.6 |
 | 2026-11-22 | Backfill by month only | Days, ranges, quarters | 9.5 |
 | 2026-11-22 | Download all, then judge | Judge and save per download | 8.4 |
+| 2026-11-23 | Backfill 2 s for every site, 3 blocks in a row | 1 s for four clean sites, 2 blocks in the run | 9.3, 9.8 |

@@ -9,9 +9,11 @@ URLs come from untrusted pages (feed items, search results, redirects), so:
 
 A site that starts blocking us must never be pushed into banning our IP (a ban
 would also stop every later test), so:
-- requests to a site are spaced `per_host_delay` apart plus random jitter;
+- requests to a site are spaced `per_host_delay` (or its `host_delays` entry) apart plus
+  random jitter;
 - a 429 `Retry-After` is honoured, and a site asking for a longer wait is stopped;
-- after `block_threshold` block answers in a row (403, 429, a bot-challenge page)
+- after `block_threshold` block answers in a row (403, 429, a bot-challenge page; the
+  backfill counts every block in the run, `block_strikes_reset: false`)
   the site is not asked again this run, and it is put on a cooldown saved in
   `data/cache/host_blocks.json`, so later runs and `check-sources` skip it too.
 
@@ -225,6 +227,9 @@ class Fetcher:
         self.user_agent = s.get("user_agent", "AVNNewsScraper/0.1")
         self.robots_agent = s.get("robots_agent", "AVNNewsScraper")
         self.per_host_delay = float(s.get("per_host_delay", 1.0))
+        # Sites (www-less host names) paced differently from per_host_delay. Exact host only:
+        # a subdomain (en.x.com) keeps per_host_delay.
+        self.host_delays = {_site_key(h): float(d) for h, d in (s.get("host_delays") or {}).items()}
         self.jitter = float(s.get("per_host_jitter", 0.5))  # extra random delay, as a share of the delay
         self.retries = int(s.get("retries", 2))
         self.respect_robots = bool(s.get("respect_robots", True))
@@ -234,6 +239,9 @@ class Fetcher:
         # (or a stuck connection) could hold a request forever. This caps one whole attempt.
         self.request_deadline = float(s.get("request_deadline_seconds", 180))
         self.block_threshold = int(s.get("block_threshold", 3))
+        # True: an answer that is not a block clears the count, so only blocks in a row stop
+        # a site. False: every block in the run counts (the backfill).
+        self.strikes_reset = bool(s.get("block_strikes_reset", True))
         self.error_threshold = int(s.get("error_threshold", 5))
         self.cooldown_hours = float(s.get("block_cooldown_hours", 12))
         self.max_retry_after = float(s.get("max_retry_after", 120))
@@ -262,7 +270,7 @@ class Fetcher:
         self._host_last: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
         self._robots_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._strikes: Counter[str] = Counter()  # block answers in a row, per host
+        self._strikes: Counter[str] = Counter()  # block answers (in a row, or in the run), per host
         self._errors_in_row: Counter[str] = Counter()  # timeouts / connection errors in a row, per host
         self._stopped: dict[str, str] = {}  # host -> why it is not asked again this run
         self.cooldowns = HostCooldowns(cooldown_path)
@@ -526,13 +534,15 @@ class Fetcher:
         self.stats[f"block_{kind}"] += 1
         self._strikes[host] += 1
         if self._strikes[host] >= self.block_threshold:
-            await self._stop_host(host, f"{self._strikes[host]} block answers in a row, last: {kind} on {url}")
+            counted = "in a row" if self.strikes_reset else "this run"
+            await self._stop_host(host, f"{self._strikes[host]} block answers {counted}, last: {kind} on {url}")
 
     async def _request(self, url: str, purpose: str = "page") -> httpx.Response | None:
         parts = urlsplit(url)
         host = parts.netloc
         impersonate = self.uses_impersonation(parts.hostname or "")
-        delay = max(self.per_host_delay, self.impersonate_delay) if impersonate else self.per_host_delay
+        base = self.host_delays.get(_site_key(parts.hostname or ""), self.per_host_delay)
+        delay = max(base, self.impersonate_delay) if impersonate else base
         if self.block_log:
             self._tally(host, parts.hostname or "", impersonate)
         resp: httpx.Response | None = None
@@ -595,7 +605,8 @@ class Fetcher:
                     continue
                 return resp
             if resp is not None:
-                self._strikes[host] = 0
+                if self.strikes_reset:
+                    self._strikes[host] = 0
                 if resp.status_code < 500:
                     return resp
             if attempt < self.retries:

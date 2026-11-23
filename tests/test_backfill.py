@@ -390,3 +390,26 @@ def test_parse_quarters_of_a_month():
 def test_parse_quarters_refuses(spec):
     with pytest.raises(ValueError):
         parse_periods([spec], TODAY)
+
+
+def test_backfill_http_settings_fast_sites_and_strict_breaker():
+    from avn_scraper.scraper.backfill import _http_settings
+
+    def src(sid, homepage, fetch="plain"):
+        return Source(id=sid, name=sid, language="bn", type="national", homepage=homepage, fetch=fetch)
+    sources = [src("big", "https://www.big.example/"), src("cf", "https://cf.example/", "impersonate"),
+               src("other", "https://other.example/")]
+    settings = {"http": {"per_host_delay": 1.0, "block_threshold": 3},
+                "backfill": {"per_host_delay": 2.0, "fast_delay": 0.5, "block_threshold": 2,
+                             "fast_sources": ["big", "cf", "missing"]}}
+    http = _http_settings(settings, sources)
+    assert http["per_host_delay"] == 2.0
+    # never below the daily run's 1 s; impersonate and unknown outlets are not fast
+    assert http["host_delays"] == {"www.big.example": 1.0}
+    assert http["block_threshold"] == 2 and http["block_strikes_reset"] is False
+
+
+def test_backfill_http_settings_without_fast_sources_keeps_everyone_slow():
+    from avn_scraper.scraper.backfill import _http_settings
+    http = _http_settings({"http": {"per_host_delay": 1.0}, "backfill": {}}, [])
+    assert http["per_host_delay"] == 2.0 and http["host_delays"] == {} and http["block_threshold"] == 2
