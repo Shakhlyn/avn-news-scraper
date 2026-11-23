@@ -57,6 +57,15 @@ On a homepage or tab page, links to tag, topic, category, author, video, photo, 
 login pages (`/category/x`, `/category?catid=1`) and page-number links (`?page=2`,
 `&pageno=3`) are not taken as articles, so they are neither downloaded nor used as date probes.
 
+Links to the site's own tabs and pages are not taken as articles either: every link in a menu,
+the header or the footer whose path is not article-shaped (short, no long number) and whose
+text is a tab name (at most 4 words, 30 characters), such as `/science-and-technology`,
+`/photos`, `/about-us`, `/privacy-policy`, plus the tabs being scanned and the homepage. A
+link under a heading or a headline block (mega-menus and "recent posts" boxes show article
+titles), or in a news ticker, is a headline and stays. Tab links are dropped from each tab page
+before date probes and paging stops, and from the outlet's links before download; a run
+counts them as `tab_links_skipped`.
+
 Tabs listed under `sections:` for an outlet in `sources.yaml` are always scanned as well.
 `auto_sections: false` turns auto-detection off for that outlet, so only the listed tabs
 are scanned. Use this for outlets whose menu is built by JavaScript (`avn check-sources`

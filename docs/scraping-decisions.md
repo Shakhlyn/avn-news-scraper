@@ -136,6 +136,26 @@ The guiding priorities, in order, when two rules pull against each other:
   hostile or hacked page point us at another site, or at addresses we must not fetch (10.1).
 - **Evidence:** 8cd3fb4.
 
+### 2.8 Links to the site's own tabs and pages are not articles
+
+- **Rule:** `find_tab_links` collects menu, header and footer links with a non-article path
+  and a tab-name text (≤ 4 words, ≤ 30 chars), unless a heading, headline block or ticker sits
+  between the link and the menu. Those, the scanned tabs and the homepage are dropped from
+  each tab page (before probes and paging stops) and from the outlet's links before download.
+- **Why / problem before:** a menu or block-heading link such as বিজ্ঞান ও প্রযুক্তি →
+  `/science-and-technology` passed as a headline (≥ 12 chars) and was downloaded and judged.
+  In the 2026-11-23 14:01 run, **669 of 36,007** judged links (1.9%) were such tab links
+  (348 judged old, 321 no match); footer tabs could also be picked as a regional page's date
+  probes. A first version (text length only) dropped real short headlines on live
+  homepages (azadi 6, suprobhat 7, bholanews 1, janmobhumi 1: mega-menu `h3.entry-title`
+  blocks, an id `bodymenuTwolead`); the heading/headline-block check and word-start
+  `menu|nav` removed all of them on 17 outlets checked.
+- **Cost:** small gain. Tab links are remembered after one download anyway (4.2), so later
+  runs save only new ones. A tab missed by the test is downloaded once, as before.
+- **Not the cause of long runs:** the old links that dominate (dainikcoxsbazar, inqilab,
+  sirajganjprotidin, ~2,500-2,800 each on 2026-11-23) are real old articles, remembered
+  after the first full run.
+
 ---
 
 ## 3. How far each tab is read (pagination)
@@ -581,6 +601,7 @@ either a lost story (read as too old) or old news shown as new.
 - Backfill pre-filter recall is unmeasured (ticket-029).
 
 ## Timeline of changed decisions
+| 2026-11-23 | Menu/footer tab links downloaded as articles | Dropped before probes and download | 2.4, 2.8 |
 
 | Date | From | To | Section |
 |---|---|---|---|

@@ -177,3 +177,33 @@ def test_pages_of_links_not_downloaded_are_dropped_after_filtering():
     _drop_unused_pages([picked, known, duplicate], [merged[next(iter(merged))]])
     assert picked.prefetched == ("<html>", "EX")  # still reused instead of a second download
     assert known.prefetched is None and duplicate.prefetched is None
+
+
+def test_footer_tab_links_are_never_probed_or_returned():
+    """The last links on a tab page are often footer tabs (about, privacy): not articles."""
+    footer = ('<footer><ul><li><a href="/about-us">আমাদের সম্পর্কে জানুন</a></li>'
+              '<li><a href="/privacy-policy">গোপনীয়তার নীতিমালা</a></li></ul></footer>')
+    home = HOME.replace("</body>", footer + "</body>")
+    page = _listing([1, 2, 3], None).replace("</body>", footer + "</body>")
+    pages = {"/local": page} | {f"/news/{i}": _article(OLD) for i in (1, 2, 3)}
+    requests: Counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = request.url.raw_path.decode()
+        requests[key] += 1
+        html = pages.get(key)
+        if html is None:
+            return httpx.Response(404, stream=_Stream(b"no"))
+        return httpx.Response(200, stream=_Stream(html.encode()), headers={"Content-Type": "text/html"})
+
+    source = Source(id="local", name="Local", language="bn", type="regional", homepage=SITE + "/")
+
+    async def go():
+        async with Fetcher({"respect_robots": False, "per_host_delay": 0, "retries": 0},
+                           transport=httpx.MockTransport(handler)) as f:
+            return await discover_sections(f, source, home, NOW - timedelta(hours=24), {}, None)
+
+    items, _, _ = asyncio.run(go())
+    assert requests["/about-us"] == 0 and requests["/privacy-policy"] == 0
+    assert not any(c.url.endswith(("/about-us", "/privacy-policy")) for c in items)
+    assert sum(requests[f"/news/{i}"] for i in (1, 2, 3)) == 3  # the articles were probed instead

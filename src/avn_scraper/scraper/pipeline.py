@@ -511,6 +511,7 @@ async def _run(cfg: Config, opts: RunOptions, storage: Storage,
         stats["sources"] = {r.source_id: {"ok": r.ok, "counts": r.counts, "endpoints": r.endpoints, "error": r.error}
                             for r in results}
         candidates = [c for r in results for c in r.candidates]
+        stats["tab_links_skipped"] = sum(r.counts.get("tab_links_skipped", 0) for r in results)
         if use_catchall:
             extra = await discover_catchall(fetcher, cfg.keywords.get("catchall_queries") or [])
             stats["catchall_candidates"] = len(extra)

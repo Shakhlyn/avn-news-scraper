@@ -12,11 +12,11 @@ from pathlib import Path
 
 from ..config import Source
 from ..fetch import Fetcher
-from ..urls import same_site
+from ..urls import canonicalize, same_site
 from . import Candidate
 from .listing import discover_listing, find_feed_links
 from .rss import discover_feed
-from .sections import discover_sections
+from .sections import discover_sections, find_tab_links
 from .sitemap import discover_sitemap
 
 log = logging.getLogger(__name__)
@@ -106,6 +106,19 @@ def _rank_sitemaps(urls: list[str]) -> list[str]:
     return [u for u in sorted(urls, key=score, reverse=True) if score(u) >= 0][:2]
 
 
+def _drop_tab_links(result: SourceResult, homepage_html: str, homepage: str) -> None:
+    """Drop links to the site's own tabs and pages (menu, header and footer links such as
+    /photos or /science-and-technology, and the tabs scanned): they are not articles, so
+    downloading them only finds "too old" or "no match". Counted as `tab_links_skipped`."""
+    tabs = find_tab_links(homepage_html, homepage, homepage) if homepage_html else set()
+    tabs |= {canonicalize(u) for u in result.endpoints.get("sections", [])}
+    tabs.add(canonicalize(homepage))
+    kept = [c for c in result.candidates if canonicalize(c.url) not in tabs]
+    if len(kept) < len(result.candidates):
+        result.counts["tab_links_skipped"] = len(result.candidates) - len(kept)
+        result.candidates = kept
+
+
 async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, cache: EndpointCache,
                           sections_settings: dict | None = None,
                           memory: ListingMemory | None = None) -> SourceResult:
@@ -115,6 +128,7 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, ca
     # hours to page through. National papers always finish, short of errors or blocks.
     budget = float((sections_settings or {}).get("regional_budget_minutes") or 0) if source.type == "regional" else 0
     deadline = time.monotonic() + budget * 60 if budget > 0 else None
+    homepage_html = ""
     try:
         items, homepage_html = await discover_listing(fetcher, source.homepage, source.homepage, source.id)
         result.add("listing", items)
@@ -147,5 +161,6 @@ async def discover_source(fetcher: Fetcher, source: Source, cutoff: datetime, ca
     except Exception as exc:  # one broken site must not stop the run
         log.warning("discovery failed for %s: %r", source.id, exc)
         result.error = repr(exc)
+    await asyncio.to_thread(_drop_tab_links, result, homepage_html, source.homepage)
     result.counts["seconds"] = round(time.monotonic() - started)
     return result

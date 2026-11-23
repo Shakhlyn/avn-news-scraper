@@ -439,3 +439,45 @@ def test_pipeline_drops_foreign_world_news_only():
              "b": c("https://x.com/international/2", "সৌদিতে দুই বাংলাদেশির মৃত্যুদণ্ড"),
              "c": c("https://x.com/national/3", "জর্ডানে তিনজনের মৃত্যুদণ্ড")}
     assert _foreign_news(cands) == ["a"]
+
+
+TAB_PAGE = """<html><body>
+<header><nav class="main-menu"><ul>
+  <li class="menu-item"><a href="/national">জাতীয়</a></li>
+  <li class="menu-item"><a href="/science-and-technology">বিজ্ঞান ও প্রযুক্তি</a></li>
+  <li class="menu-item mega"><a href="/entertainment">বিনোদন</a>
+    <div class="mega-menu"><div class="td_module_6"><h3 class="entry-title">
+      <a href="/খাতুনগঞ্জে-কমছে-চিনির-দাম/">খাতুনগঞ্জে কমছে চিনির দাম</a></h3></div></div></li>
+</ul></nav>
+<div class="news-ticker"><ul><li><a href="/ঢাকায়-আগুনে-নিহত-৫">ঢাকায় আগুনে নিহত ৫</a></li></ul></div>
+</header>
+<section id="bodymenuTwolead"><div><a href="/archives/4126">ফ্রান্সকে উড়িয়ে ফাইনালে স্পেন</a></div></section>
+<main><a href="/national/2026/11/23/12345">একটি দীর্ঘ শিরোনাম যা একটি সংবাদ নিবন্ধের</a></main>
+<footer><ul><li><a href="/about-us">আমাদের সম্পর্কে</a></li><li><a href="/photos">ফটো গ্যালারি</a></li></ul></footer>
+</body></html>"""
+
+
+def test_tab_links_are_menu_header_and_footer_tabs_not_headlines():
+    from avn_scraper.scraper.discover.sections import find_tab_links
+    from avn_scraper.scraper.urls import canonicalize
+
+    tabs = find_tab_links(TAB_PAGE, "https://x.com/", "https://x.com/")
+    for path in ("/national", "/science-and-technology", "/entertainment", "/about-us", "/photos"):
+        assert canonicalize("https://x.com" + path) in tabs, path
+    # A short headline in a mega-menu, a ticker, a page block whose id contains "menu", an article
+    for path in ("/খাতুনগঞ্জে-কমছে-চিনির-দাম/", "/ঢাকায়-আগুনে-নিহত-৫", "/archives/4126", "/national/2026/11/23/12345"):
+        assert canonicalize("https://x.com" + path) not in tabs, path
+
+
+def test_discovery_drops_links_to_the_sites_own_tabs():
+    from avn_scraper.scraper.discover import Candidate
+    from avn_scraper.scraper.discover.sources import SourceResult, _drop_tab_links
+
+    result = SourceResult("x")
+    result.add("listing", [Candidate(url=u, source_id="x", title="t") for u in (
+        "https://x.com/science-and-technology", "https://www.x.com/photos/", "https://x.com/archives/4126",
+        "https://x.com/latest", "https://x.com/")])
+    result.endpoints = {"sections": ["https://x.com/latest"]}
+    _drop_tab_links(result, TAB_PAGE, "https://x.com/")
+    assert [c.url for c in result.candidates] == ["https://x.com/archives/4126"]
+    assert result.counts["tab_links_skipped"] == 4

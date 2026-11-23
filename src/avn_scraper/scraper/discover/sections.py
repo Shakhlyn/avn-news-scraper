@@ -128,6 +128,50 @@ def find_section_links(html: str, page_url: str, homepage: str, limit: int) -> l
     return [url for key, url in top.items() if key in parents or key not in sub][:limit]
 
 
+# Tab links are told from headlines by what sits between the link and its menu. Climbing up,
+# a heading or a headline block (mega-menus and "recent posts" boxes hold article titles) or a
+# news ticker means an article; a menu, nav, header or footer reached first means a tab.
+# "menu"/"nav" must start a word: an id like "bodymenuTwolead" is a page block, not a menu.
+_TAB_MENU_ATTR = re.compile(r"(^|[\s_-])(menu|nav)", re.I)
+_HEADLINE_ATTR = re.compile(r"title|entry|post|article|story|module|p-wrap|card|item-details|lead"
+                            r"|ticker|marquee|breaking|scroll|headline", re.I)
+_HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6", "marquee", "article"}
+
+
+def _in_menu_or_footer(node) -> bool:
+    """True when the link sits in a menu, the header or the footer with no heading or headline
+    block in between."""
+    node = node.parent
+    while node is not None:
+        attrs = node.attributes
+        names = f"{attrs.get('class') or ''} {attrs.get('id') or ''}"
+        if node.tag in _HEADINGS or _HEADLINE_ATTR.search(names):
+            return False
+        if (node.tag in ("nav", "header", "footer") or attrs.get("role") == "navigation"
+                or _TAB_MENU_ATTR.search(names)):
+            return True
+        node = node.parent
+    return False
+
+
+def find_tab_links(html: str, page_url: str, homepage: str) -> set[str]:
+    """Canonical URLs of the site's own tabs and pages, so they are not taken as articles.
+
+    Every link in a menu (any level, also tabs not scanned, such as photos, about or
+    literature-and-culture), the header or the footer whose path is not article-shaped (short,
+    no long number) and whose text is a tab name (at most _MAX_TEXT_WORDS words and
+    _MAX_TEXT_CHARS characters), not a headline.
+    """
+    out: set[str] = set()
+    for a, url, text in _links(html, page_url):
+        if (_section_path(url, homepage) is None or not 2 <= len(text) <= _MAX_TEXT_CHARS
+                or len(text.split()) > _MAX_TEXT_WORDS):
+            continue
+        if _in_menu_or_footer(a):
+            out.add(canonicalize(url))
+    return out
+
+
 def find_print_links(html: str, page_url: str, homepage: str) -> list[str]:
     """Links (anywhere on the page) to the print edition / e-paper listed on the outlet's own site."""
     seen = {canonicalize(homepage)}
@@ -287,6 +331,10 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
             keys.add(canonicalize(u))
             sections.append(u)
     sections = sections[:limit]
+    # Links to the site's own tabs and pages (menu, header, footer) are not articles: left out of
+    # each page's items, so they are neither probed nor counted by the paging stops.
+    tabs = await asyncio.to_thread(find_tab_links, homepage_html, source.homepage, source.homepage) if homepage_html else set()
+    tabs |= keys | {canonicalize(source.homepage)}
 
     out: list[Candidate] = []
     pages = 0
@@ -301,6 +349,7 @@ async def discover_sections(fetcher: Fetcher, source: Source, homepage_html: str
                 return out, sections, pages
             visited.add(canonicalize(url))
             items, html = await discover_listing(fetcher, url, source.homepage, source.id)
+            items = [c for c in items if canonicalize(c.url) not in tabs]
             pages += 1
             out += items
             ids = {article_id(c.url) for c in items}
